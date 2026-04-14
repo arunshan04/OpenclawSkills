@@ -9,8 +9,6 @@ description: Use this skill to query the DeepTutor knowledge bases and retrieve 
 - When the user asks questions that may be answered from internal knowledge bases
 - When retrieving structured or stored knowledge is required
 
-<<<<<<< HEAD
-=======
 ## Workflow
 - List Available Kowledge databse names
 - Understand the User question if the user given database name explicitly then use the name to query it.
@@ -18,7 +16,6 @@ description: Use this skill to query the DeepTutor knowledge bases and retrieve 
 - Select and Query that database.
 - Analyze the Query chunks with User question.
 - Retrun the response to User
->>>>>>> a6600a1 (first commit)
 ---
 
 ## Available Actions
@@ -31,29 +28,16 @@ Use this when:
 Command:
 To Fetch the Available Knowledge Base
 ```bash
-<<<<<<< HEAD
-/usr/bin/python3 /sandbox/.openclaw-data/skills/DeepTutor/scripts/openclaw_kb_tool.py list
-=======
 /usr/bin/python3 /sandbox/.openclaw-data/skills/DeepTutor/openclaw_kb_tool.py list
->>>>>>> a6600a1 (first commit)
 # {"knowledge_bases": ["Database1", "Database2"]}
 ```
 To Fetch Detailed information about the database
 ```bash
-<<<<<<< HEAD
-/usr/bin/python3 /sandbox/.openclaw-data/skills/DeepTutor/scripts/openclaw_kb_tool.py info "Database1"
-=======
 /usr/bin/python3 /sandbox/.openclaw-data/skills/DeepTutor/openclaw_kb_tool.py info "Database1"
->>>>>>> a6600a1 (first commit)
 # {"name": "Database1", "path": "/app/data/knowledge_bases/Database1", "is_default": true, "metadata": {"name": "Database1", "created_at": "2026-04-03 04:35:39", "description": "Knowledge base: Database1", "version": "1.0", "rag_provider": "llamaindex", ...}}}
 ```
 To Query the relevent Chunks for the user input.
 ```bash
-<<<<<<< HEAD
-/usr/bin/python3 /sandbox/.openclaw-data/skills/DeepTutor/scripts/openclaw_kb_tool.py chunks --kb "<Database1>" --mode hybrid --top-k 1  "User Query"
-```
-=======
 /usr/bin/python3 /sandbox/.openclaw-data/skills/DeepTutor/openclaw_kb_tool.py chunks --kb "<Database1>" --mode hybrid --top-k 1  "User Query"
 ```
 
->>>>>>> a6600a1 (first commit)
