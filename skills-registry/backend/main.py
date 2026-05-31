@@ -15,6 +15,10 @@ from models import SkillCreate, SkillUpdate, LLMResearchRequest, LLMResearchResp
 from database import init_db, get_db, row_to_dict
 from llm_service import research_skill
 from executor import execute_tool, load_tool_fn
+from logger import setup_logging, get_log_buffer, log
+
+setup_logging()
+_log = log("registry")
 
 
 # ── MCP Server ────────────────────────────────────────────────────────────────
@@ -40,16 +44,16 @@ def register_skill_tools(tools: list[dict], skill_name: str):
 
         fn = load_tool_fn(code, tool_name)
         if fn is None:
-            print(f"[MCP] Skipped '{tool_name}' from '{skill_name}' — load error")
+            _log.warning("MCP_SKIP  tool=%s  skill=%s  reason=load_error", tool_name, skill_name)
             continue
 
         try:
             mcp_tool = MCPTool.from_function(fn, name=tool_name, description=tool_def.get("description", ""))
             mcp.add_tool(mcp_tool)
             _registered_tool_names.add(tool_name)
-            print(f"[MCP] Registered tool: {tool_name} (from '{skill_name}')")
+            _log.info("MCP_REGISTER  tool=%s  skill=%s", tool_name, skill_name)
         except Exception as e:
-            print(f"[MCP] Could not register '{tool_name}': {e}")
+            _log.error("MCP_REGISTER_FAIL  tool=%s  skill=%s  error=%s", tool_name, skill_name, e)
 
 
 def load_all_dynamic_tools():
@@ -58,9 +62,12 @@ def load_all_dynamic_tools():
         rows = conn.execute(
             "SELECT name, tools FROM skills WHERE status='active'"
         ).fetchall()
+    before = len(_registered_tool_names)
     for row in rows:
         tools = json.loads(row["tools"]) if isinstance(row["tools"], str) else row["tools"] or []
         register_skill_tools(tools, row["name"])
+    added = len(_registered_tool_names) - before
+    _log.info("STARTUP  skills_scanned=%d  tools_registered=%d", len(rows), added)
 
 
 # ── Built-in registry MCP tools ───────────────────────────────────────────────
@@ -120,13 +127,14 @@ def list_categories() -> List[str]:
 # ── FastAPI App ───────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _log.info("SERVER_START  rest=0.0.0.0:8000  mcp=0.0.0.0:8001")
     init_db()
     load_all_dynamic_tools()
-    # Run MCP server on port 8001 alongside the REST API
     task = asyncio.create_task(
         mcp.run_http_async(host="0.0.0.0", port=8001, json_response=True, stateless_http=True)
     )
     yield
+    _log.info("SERVER_STOP")
     task.cancel()
     try:
         await task
@@ -178,8 +186,10 @@ def api_execute_tool(skill_id: str, tool_name: str, req: ExecuteRequest):
         result = execute_tool(code, tool_name, req.params)
         return {"ok": True, "result": result, "tool": tool_name}
     except TimeoutError as e:
+        _log.error("TOOL_TIMEOUT  skill=%s  tool=%s", skill_id, tool_name)
         raise HTTPException(status_code=408, detail=str(e))
     except (ValueError, RuntimeError) as e:
+        _log.error("TOOL_EXEC_FAIL  skill=%s  tool=%s  error=%s", skill_id, tool_name, str(e)[:200])
         raise HTTPException(status_code=422, detail=str(e))
 
 
@@ -278,6 +288,8 @@ def api_create_skill(skill: SkillCreate):
             now, now
         ))
     register_skill_tools(tools_data, skill.name)
+    _log.info("SKILL_CREATE  id=%s  name=%s  category=%s  tools=%d  source=%s",
+              skill_id, skill.name, skill.category, len(tools_data), skill.source)
     return api_get_skill(skill_id)
 
 
@@ -313,15 +325,18 @@ def api_update_skill(skill_id: str, update: SkillUpdate):
 
     if tools_data:
         register_skill_tools(tools_data, current.get("name", skill_id))
+    changed = [k for k in update.model_dump(exclude_none=True).keys()]
+    _log.info("SKILL_UPDATE  id=%s  name=%s  fields=%s", skill_id, current.get("name"), changed)
     return api_get_skill(skill_id)
 
 
 @app.delete("/skills/{skill_id}", status_code=204)
 def api_delete_skill(skill_id: str):
     with get_db() as conn:
-        row = conn.execute("SELECT id FROM skills WHERE id = ?", (skill_id,)).fetchone()
+        row = conn.execute("SELECT id, name FROM skills WHERE id = ?", (skill_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Skill not found")
+        _log.info("SKILL_DELETE  id=%s  name=%s", skill_id, row["name"])
         conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
 
 
@@ -338,6 +353,15 @@ def api_research_skill(request: LLMResearchRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM research failed: {str(e)}")
+
+
+@app.get("/logs")
+def api_logs(limit: int = Query(100, le=500), level: Optional[str] = Query(None)):
+    """Return recent log entries from the in-memory buffer."""
+    entries = get_log_buffer()
+    if level:
+        entries = [e for e in entries if e.get("level") == level.upper()]
+    return {"logs": entries[-limit:], "total": len(entries)}
 
 
 @app.get("/health")

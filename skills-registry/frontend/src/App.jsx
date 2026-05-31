@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Search, Filter, Grid, List, RefreshCw, Sparkles, Settings, X, ChevronDown, Zap, Database, Cpu } from 'lucide-react'
+import { Plus, Search, Filter, Grid, List, RefreshCw, Sparkles, Settings, X, ChevronDown, Zap, Database, Cpu, ScrollText } from 'lucide-react'
 import toast from 'react-hot-toast'
 import SkillCard from './components/SkillCard'
 import SkillDetailModal from './components/SkillDetailModal'
 import AddSkillModal from './components/AddSkillModal'
+import LogsPanel from './components/LogsPanel'
 import { skillsApi } from './services/api'
 
 function StatCard({ label, value, icon: Icon, color }) {
@@ -243,15 +244,24 @@ export default function App() {
           </>
         )}
 
+        {/* Activity Log */}
+        <div className="mt-8">
+          <div className="flex items-center gap-2 mb-3">
+            <ScrollText className="w-4 h-4 text-indigo-400" />
+            <h2 className="text-sm font-semibold text-gray-200">Activity Log</h2>
+          </div>
+          <LogsPanel />
+        </div>
+
         {/* MCP info footer */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 mt-8">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
           <div className="flex items-start gap-3">
             <Cpu className="w-5 h-5 text-indigo-400 flex-shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-semibold text-gray-200">MCP Server</p>
               <p className="text-xs text-gray-500 mt-0.5">
                 Connect your MCP client to{' '}
-                <code className="font-mono text-indigo-300 bg-indigo-950/50 px-1 rounded">http://localhost:8000/mcp</code>{' '}
+                <code className="font-mono text-indigo-300 bg-indigo-950/50 px-1 rounded">http://localhost:8001/mcp</code>{' '}
                 to access all {stats?.active || 0} active skills via the Model Context Protocol.
               </p>
             </div>

@@ -16,6 +16,8 @@ export const skillsApi = {
   research: (data) => api.post('/skills/research', data).then(r => r.data),
   executeTool: (skillId, toolName, params = {}) =>
     api.post(`/skills/${skillId}/tools/${toolName}/execute`, { params }).then(r => r.data),
+  logs: (limit = 100, level = null) =>
+    api.get('/logs', { params: { limit, ...(level ? { level } : {}) } }).then(r => r.data),
 }
 
 export default api
