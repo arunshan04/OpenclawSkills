@@ -1,7 +1,6 @@
 import json
 import uuid
-import inspect
-import traceback
+import asyncio
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import List, Optional, Any
@@ -117,15 +116,20 @@ def list_categories() -> List[str]:
 
 
 # ── FastAPI App ───────────────────────────────────────────────────────────────
-_mcp_http_app = mcp.http_app()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with _mcp_http_app.lifespan(app):
-        init_db()
-        load_all_dynamic_tools()
-        yield
+    init_db()
+    load_all_dynamic_tools()
+    # Run MCP server on port 8001 alongside the REST API
+    task = asyncio.create_task(
+        mcp.run_http_async(host="0.0.0.0", port=8001, json_response=True, stateless_http=True)
+    )
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(
@@ -142,8 +146,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.mount("/mcp", _mcp_http_app)
 
 
 # ── Tool execution ────────────────────────────────────────────────────────────
@@ -179,7 +181,7 @@ def api_execute_tool(skill_id: str, tool_name: str, req: ExecuteRequest):
         raise HTTPException(status_code=422, detail=str(e))
 
 
-@app.post("/mcp/reload")
+@app.post("/tools/reload")
 def api_reload_tools():
     """Re-scan the DB and register any newly added tool implementations with FastMCP."""
     before = len(_registered_tool_names)
