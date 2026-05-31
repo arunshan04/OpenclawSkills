@@ -1,11 +1,15 @@
 import logging
 import json
+import os
 import time
 from collections import deque
 from datetime import datetime, timezone
 
 # In-memory ring buffer — last 500 log entries served via /logs
 _log_buffer: deque = deque(maxlen=500)
+
+# Write log file outside the project directory so watchfiles doesn't pick it up
+LOG_FILE = os.environ.get("REGISTRY_LOG_FILE", "/tmp/registry.log")
 
 
 class BufferHandler(logging.Handler):
@@ -35,8 +39,8 @@ def setup_logging():
     console.setFormatter(fmt)
     root.addHandler(console)
 
-    # File
-    file_handler = logging.FileHandler("registry.log", encoding="utf-8")
+    # File (written to /tmp to avoid triggering watchfiles reload)
+    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
     file_handler.setFormatter(fmt)
     root.addHandler(file_handler)
 
