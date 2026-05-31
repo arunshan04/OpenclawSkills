@@ -8,6 +8,7 @@ from typing import List, Optional, Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastmcp import FastMCP
+from fastmcp.tools import Tool as MCPTool
 from pydantic import BaseModel
 
 from models import SkillCreate, SkillUpdate, LLMResearchRequest, LLMResearchResponse
@@ -43,7 +44,8 @@ def register_skill_tools(tools: list[dict], skill_name: str):
             continue
 
         try:
-            mcp.add_tool(fn, name=tool_name, description=tool_def.get("description", ""))
+            mcp_tool = MCPTool.from_function(fn, name=tool_name, description=tool_def.get("description", ""))
+            mcp.add_tool(mcp_tool)
             _registered_tool_names.add(tool_name)
             print(f"[MCP] Registered tool: {tool_name} (from '{skill_name}')")
         except Exception as e:
@@ -296,11 +298,11 @@ def api_update_skill(skill_id: str, update: SkillUpdate):
 
         tools_data = None
         if "tools" in data:
-            tools_data = [item.model_dump() for item in data["tools"]]
+            tools_data = [item if isinstance(item, dict) else item.model_dump() for item in data["tools"]]
             data["tools"] = json.dumps(tools_data)
         for field in ["prompts", "resources"]:
             if field in data:
-                data[field] = json.dumps([item.model_dump() for item in data[field]])
+                data[field] = json.dumps([item if isinstance(item, dict) else item.model_dump() for item in data[field]])
 
         if not data:
             return current
