@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import { X, Wrench, Zap, Database, Settings, Copy, Trash2, Edit, CheckCircle, Tag, User, Clock, Server } from 'lucide-react'
-import toast from 'react-hot-toast'
+import { X, Wrench, Zap, Database, Copy, Trash2, Edit, CheckCircle, Tag, User, Clock, Server } from 'lucide-react'
 
 function JsonBlock({ data }) {
   const [copied, setCopied] = useState(false)

@@ -38,18 +38,6 @@ export default function IconPicker({ icon, bgColor, onIconChange, onBgColorChang
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState('Tech & Dev')
 
-  const filteredIcons = search
-    ? Object.values(ICON_CATEGORIES).flat().filter((_, i) =>
-        Object.entries(ICON_CATEGORIES).some(([cat, icons]) =>
-          cat.toLowerCase().includes(search.toLowerCase()) && icons.includes(_)
-        ) || true
-      ).slice(0, 60)
-    : ICON_CATEGORIES[activeCategory] || []
-
-  const allIcons = search
-    ? [...new Set(Object.values(ICON_CATEGORIES).flat())].filter(() => true)
-    : null
-
   const displayIcons = search
     ? [...new Set(Object.values(ICON_CATEGORIES).flat())]
     : ICON_CATEGORIES[activeCategory] || []

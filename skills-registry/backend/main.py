@@ -1,6 +1,5 @@
 import json
 import uuid
-import os
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -9,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastmcp import FastMCP
 
-from models import Skill, SkillCreate, SkillUpdate, LLMResearchRequest, LLMResearchResponse
+from models import SkillCreate, SkillUpdate, LLMResearchRequest, LLMResearchResponse
 from database import init_db, get_db, row_to_dict
 from llm_service import research_skill
 

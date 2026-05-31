@@ -1,7 +1,5 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from datetime import datetime
-import uuid
 
 
 class ToolDef(BaseModel):
@@ -56,12 +54,6 @@ class SkillUpdate(BaseModel):
     resources: Optional[List[ResourceDef]] = None
     mcp_config: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
-
-
-class Skill(SkillCreate):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class LLMResearchRequest(BaseModel):
