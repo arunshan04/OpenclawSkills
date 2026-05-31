@@ -67,7 +67,8 @@ Return a JSON object with this EXACT structure:
           "param_name": {{"type": "string", "description": "Parameter description"}}
         }},
         "required": ["param_name"]
-      }}
+      }},
+      "code": "def tool_function_name(param_name: str) -> str:\n    # Implementation using only these available modules:\n    # requests, json, re, math, datetime, uuid, os, pathlib, subprocess, shutil\n    # No import statements needed — modules are pre-loaded\n    result = f\"Result for {{param_name}}\"\n    return result"
     }}
   ],
   "prompts": [
@@ -90,7 +91,15 @@ Return a JSON object with this EXACT structure:
   }}
 }}
 
-Generate 2-4 meaningful tools and 0-2 prompts. Make tool schemas realistic and useful."""
+IMPORTANT for tools:
+- Write REAL working Python code for each tool's "code" field
+- The function name MUST exactly match the tool "name" field
+- Do NOT use import statements — these modules are pre-loaded: requests, json, re, math, datetime, uuid, os, pathlib, subprocess, shutil
+- Use requests for HTTP calls, pathlib for file ops, subprocess for shell commands
+- Return a string result always
+- Keep each function focused and complete (not pseudocode)
+
+Generate 2-4 meaningful tools with real implementations and 0-2 prompts."""
 
     message = client.messages.create(
         model="claude-opus-4-8",
