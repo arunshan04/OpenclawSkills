@@ -7,6 +7,8 @@ class ToolDef(BaseModel):
     description: str
     input_schema: Optional[Dict[str, Any]] = None
     code: Optional[str] = None
+    source_file: Optional[str] = None   # path to a .py file on disk
+    source_url: Optional[str] = None    # HTTP endpoint to delegate execution to
 
 
 class PromptDef(BaseModel):

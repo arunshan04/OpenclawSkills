@@ -56,15 +56,21 @@ def _wrap_with_logging(fn, tool_name: str):
     return logged
 
 
-def register_skill_tools(tools: list[dict], skill_name: str):
+def register_skill_tools(tools: list[dict], skill_name: str, override: bool = False):
     """Dynamically register tool implementations with FastMCP."""
     for tool_def in tools:
         tool_name = tool_def.get("name", "").strip()
-        code = tool_def.get("code", "").strip()
-        if not tool_name or not code or tool_name in _registered_tool_names:
+        has_impl = any([
+            tool_def.get("code", "").strip(),
+            tool_def.get("source_file", "").strip(),
+            tool_def.get("source_url", "").strip(),
+        ])
+        if not tool_name or not has_impl:
+            continue
+        if tool_name in _registered_tool_names and not override:
             continue
 
-        fn = load_tool_fn(code, tool_name)
+        fn = load_tool_fn(tool_def, tool_name)
         if fn is None:
             _log.warning("MCP_SKIP  tool=%s  skill=%s  reason=load_error", tool_name, skill_name)
             continue
@@ -74,7 +80,9 @@ def register_skill_tools(tools: list[dict], skill_name: str):
             mcp_tool = MCPTool.from_function(logged_fn, name=tool_name, description=tool_def.get("description", ""))
             mcp.add_tool(mcp_tool)
             _registered_tool_names.add(tool_name)
-            _log.info("MCP_REGISTER  tool=%s  skill=%s", tool_name, skill_name)
+            source = tool_def.get("source_file") or tool_def.get("source_url") or "inline"
+            _log.info("MCP_REGISTER  tool=%s  skill=%s  source=%s  override=%s",
+                      tool_name, skill_name, source, override)
         except Exception as e:
             _log.error("MCP_REGISTER_FAIL  tool=%s  skill=%s  error=%s", tool_name, skill_name, e)
 
@@ -240,6 +248,48 @@ def api_reload_tools():
     load_all_dynamic_tools()
     after = len(_registered_tool_names)
     return {"registered_tools": after, "newly_added": after - before}
+
+
+class ExternalToolRequest(BaseModel):
+    name: str
+    description: str
+    input_schema: Optional[dict] = None
+    # Provide ONE of these:
+    code: Optional[str] = None          # inline Python
+    source_file: Optional[str] = None   # /path/to/file.py  (function name must match 'name')
+    source_url: Optional[str] = None    # https://my-api.com/tool  (POST, receives params as JSON)
+    override: bool = False              # replace if already registered
+
+
+@app.post("/tools/register")
+def api_register_external_tool(req: ExternalToolRequest):
+    """
+    Register an external tool with MCP directly — no skill record needed.
+    Use this to wire up functions from files, HTTP endpoints, or inline code
+    without going through the UI.
+    """
+    if not any([req.code, req.source_file, req.source_url]):
+        raise HTTPException(status_code=400, detail="Provide code, source_file, or source_url")
+
+    if req.name in _registered_tool_names and not req.override:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tool '{req.name}' already registered. Set override=true to replace it."
+        )
+
+    tool_def = req.model_dump()
+    fn = load_tool_fn(tool_def, req.name)
+    if fn is None:
+        raise HTTPException(status_code=422, detail=f"Failed to load function '{req.name}'. Check your code/file.")
+
+    logged_fn = _wrap_with_logging(fn, req.name)
+    mcp_tool = MCPTool.from_function(logged_fn, name=req.name, description=req.description)
+    mcp.add_tool(mcp_tool)
+    _registered_tool_names.add(req.name)
+
+    source = req.source_file or req.source_url or "inline"
+    _log.info("MCP_REGISTER  tool=%s  skill=external  source=%s  override=%s", req.name, source, req.override)
+    return {"ok": True, "tool": req.name, "source": source, "registered_tools": sorted(_registered_tool_names)}
 
 
 # ── REST Endpoints ────────────────────────────────────────────────────────────
