@@ -23,7 +23,15 @@ def _build_namespace() -> dict:
     except ImportError:
         pass
 
-    # Restricted builtins — no file/exec/eval/import
+    # File system + subprocess (for file/shell tools)
+    import os, pathlib, subprocess, shutil, glob
+    ns["os"] = os
+    ns["pathlib"] = pathlib
+    ns["subprocess"] = subprocess
+    ns["shutil"] = shutil
+    ns["glob"] = glob
+
+    # Restricted builtins — no eval/compile/import
     ns["__builtins__"] = {
         "print": print, "len": len, "range": range, "enumerate": enumerate,
         "zip": zip, "map": map, "filter": filter, "sorted": sorted,
@@ -35,6 +43,8 @@ def _build_namespace() -> dict:
         "setattr": setattr, "vars": vars, "dir": dir,
         "Exception": Exception, "ValueError": ValueError,
         "KeyError": KeyError, "TypeError": TypeError,
+        "IOError": IOError, "OSError": OSError, "FileNotFoundError": FileNotFoundError,
+        "open": open,
         "True": True, "False": False, "None": None,
     }
     return ns
