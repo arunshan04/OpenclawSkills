@@ -1,6 +1,8 @@
 import json
 import uuid
 import asyncio
+import time
+import functools
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import List, Optional, Any
@@ -34,6 +36,26 @@ mcp = FastMCP(
 _registered_tool_names: set[str] = set()
 
 
+def _wrap_with_logging(fn, tool_name: str):
+    """Wrap a tool function so every MCP call is logged with params, result, and timing."""
+    @functools.wraps(fn)
+    def logged(**kwargs):
+        param_summary = {k: (str(v)[:80] if isinstance(v, str) else v) for k, v in kwargs.items()}
+        _log.info("TOOL_CALL  tool=%s  params=%s", tool_name, param_summary)
+        t0 = time.monotonic()
+        try:
+            result = fn(**kwargs)
+            ms = round((time.monotonic() - t0) * 1000)
+            preview = str(result)[:120].replace("\n", "↵")
+            _log.info("TOOL_OK  tool=%s  ms=%d  result=%r", tool_name, ms, preview)
+            return result
+        except Exception as exc:
+            ms = round((time.monotonic() - t0) * 1000)
+            _log.error("TOOL_ERROR  tool=%s  ms=%d  error=%s", tool_name, ms, exc)
+            raise
+    return logged
+
+
 def register_skill_tools(tools: list[dict], skill_name: str):
     """Dynamically register tool implementations with FastMCP."""
     for tool_def in tools:
@@ -48,7 +70,8 @@ def register_skill_tools(tools: list[dict], skill_name: str):
             continue
 
         try:
-            mcp_tool = MCPTool.from_function(fn, name=tool_name, description=tool_def.get("description", ""))
+            logged_fn = _wrap_with_logging(fn, tool_name)
+            mcp_tool = MCPTool.from_function(logged_fn, name=tool_name, description=tool_def.get("description", ""))
             mcp.add_tool(mcp_tool)
             _registered_tool_names.add(tool_name)
             _log.info("MCP_REGISTER  tool=%s  skill=%s", tool_name, skill_name)
@@ -78,6 +101,8 @@ def list_skills(
     limit: int = 50,
 ) -> List[dict]:
     """List all skills in the registry, optionally filtered by category or status."""
+    _log.info("TOOL_CALL  tool=list_skills  params={category=%s, status=%s, limit=%d}", category, status, limit)
+    t0 = time.monotonic()
     with get_db() as conn:
         query = "SELECT * FROM skills WHERE 1=1"
         params: list = []
@@ -90,22 +115,31 @@ def list_skills(
         query += " ORDER BY name LIMIT ?"
         params.append(limit)
         rows = conn.execute(query, params).fetchall()
-        return [row_to_dict(r) for r in rows]
+        result = [row_to_dict(r) for r in rows]
+    _log.info("TOOL_OK  tool=list_skills  ms=%d  result=%d skills", round((time.monotonic()-t0)*1000), len(result))
+    return result
 
 
 @mcp.tool()
 def get_skill(skill_id: str) -> dict:
     """Get detailed information about a specific skill by its ID."""
+    _log.info("TOOL_CALL  tool=get_skill  params={skill_id=%s}", skill_id)
+    t0 = time.monotonic()
     with get_db() as conn:
         row = conn.execute("SELECT * FROM skills WHERE id = ?", (skill_id,)).fetchone()
         if not row:
+            _log.warning("TOOL_OK  tool=get_skill  ms=%d  result=not_found", round((time.monotonic()-t0)*1000))
             return {"error": f"Skill '{skill_id}' not found"}
-        return row_to_dict(row)
+        result = row_to_dict(row)
+    _log.info("TOOL_OK  tool=get_skill  ms=%d  result=%s", round((time.monotonic()-t0)*1000), result.get("name"))
+    return result
 
 
 @mcp.tool()
 def search_skills(query: str) -> List[dict]:
     """Search skills by name, description, or tags."""
+    _log.info("TOOL_CALL  tool=search_skills  params={query=%r}", query)
+    t0 = time.monotonic()
     with get_db() as conn:
         rows = conn.execute(
             """SELECT * FROM skills WHERE
@@ -113,15 +147,21 @@ def search_skills(query: str) -> List[dict]:
                ORDER BY name LIMIT 20""",
             tuple(f"%{query}%" for _ in range(4))
         ).fetchall()
-        return [row_to_dict(r) for r in rows]
+        result = [row_to_dict(r) for r in rows]
+    _log.info("TOOL_OK  tool=search_skills  ms=%d  result=%d matches", round((time.monotonic()-t0)*1000), len(result))
+    return result
 
 
 @mcp.tool()
 def list_categories() -> List[str]:
     """List all unique skill categories in the registry."""
+    _log.info("TOOL_CALL  tool=list_categories")
+    t0 = time.monotonic()
     with get_db() as conn:
         rows = conn.execute("SELECT DISTINCT category FROM skills ORDER BY category").fetchall()
-        return [r[0] for r in rows]
+        result = [r[0] for r in rows]
+    _log.info("TOOL_OK  tool=list_categories  ms=%d  result=%s", round((time.monotonic()-t0)*1000), result)
+    return result
 
 
 # ── FastAPI App ───────────────────────────────────────────────────────────────

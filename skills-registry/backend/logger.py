@@ -47,6 +47,10 @@ def setup_logging():
     # In-memory buffer for /logs API
     root.addHandler(BufferHandler())
 
+    # Silence noisy internal MCP/uvicorn/watchfiles loggers
+    for noisy in ("mcp.server", "uvicorn.access", "uvicorn.error", "watchfiles"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
 
 def get_log_buffer() -> list:
     return list(_log_buffer)
