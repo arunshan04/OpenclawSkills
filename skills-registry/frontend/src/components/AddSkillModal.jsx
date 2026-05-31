@@ -49,7 +49,9 @@ const CODE_TEMPLATE = (name) => `def ${name || 'tool_name'}(param1: str) -> str:
     return result`
 
 function ToolEditor({ tools, onChange }) {
-  const [openCode, setOpenCode] = useState({})
+  const [openCode, setOpenCode] = useState(() =>
+    Object.fromEntries(tools.map((t, i) => [i, !!t.code?.trim()]))
+  )
   const add = () => onChange([...tools, { name: '', description: '', input_schema: null, code: '' }])
   const update = (i, field, val) => {
     const next = [...tools]
