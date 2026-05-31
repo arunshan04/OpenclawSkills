@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { X, Plus, Trash2, Sparkles, Wrench, Zap } from 'lucide-react'
+import { X, Plus, Trash2, Sparkles, Wrench, Zap, Copy, CheckCircle, ChevronDown } from 'lucide-react'
 import toast from 'react-hot-toast'
 import IconPicker from './IconPicker'
 import LLMResearchPanel from './LLMResearchPanel'
 import { skillsApi } from '../services/api'
+import { skillToYaml } from '../services/yaml'
 
 const CATEGORIES = [
   'Research', 'Development', 'Analytics', 'Security', 'Creative',
@@ -123,6 +124,42 @@ function PromptEditor({ prompts, onChange }) {
       <button onClick={add} className="btn-secondary text-xs py-1.5 w-full justify-center">
         <Plus className="w-3.5 h-3.5" /> Add Prompt
       </button>
+    </div>
+  )
+}
+
+function YamlPreview({ form }) {
+  const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const yaml = skillToYaml(form)
+  const copy = () => {
+    navigator.clipboard.writeText(yaml)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+  return (
+    <div className="border border-gray-800 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-950 hover:bg-gray-900 transition-colors text-left"
+      >
+        <span className="text-xs font-mono font-semibold text-indigo-400">📄 YAML Preview</span>
+        <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="relative">
+          <pre className="text-xs font-mono p-4 bg-gray-950 text-gray-300 overflow-x-auto max-h-64 leading-relaxed border-t border-gray-800">
+            {yaml}
+          </pre>
+          <button
+            onClick={copy}
+            className="absolute top-2 right-2 p-1.5 rounded-md bg-gray-800 hover:bg-gray-700 transition-all"
+            title="Copy YAML"
+          >
+            {copied ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-gray-400" />}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -354,6 +391,9 @@ export default function AddSkillModal({ existingSkills = [], editSkill = null, o
                   <p className="text-xs text-gray-500">{form.category} · {form.tools.filter(t => t.name).length} tools</p>
                 </div>
               </div>
+
+              {/* YAML Preview */}
+              <YamlPreview form={form} />
             </div>
           )}
         </div>

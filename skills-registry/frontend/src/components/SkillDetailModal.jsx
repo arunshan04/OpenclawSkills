@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { X, Wrench, Zap, Database, Copy, Trash2, Edit, CheckCircle, Tag, User, Clock, Server } from 'lucide-react'
+import { skillToYaml } from '../services/yaml'
 
-function JsonBlock({ data }) {
+function JsonBlock({ data, isYaml = false }) {
   const [copied, setCopied] = useState(false)
-  const text = JSON.stringify(data, null, 2)
+  const text = isYaml ? data : JSON.stringify(data, null, 2)
   const copy = () => {
     navigator.clipboard.writeText(text)
     setCopied(true)
@@ -11,12 +12,13 @@ function JsonBlock({ data }) {
   }
   return (
     <div className="relative group">
-      <pre className="text-xs font-mono bg-gray-950 border border-gray-800 rounded-lg p-3 overflow-x-auto text-gray-300 max-h-48">
+      <pre className="text-xs font-mono bg-gray-950 border border-gray-800 rounded-lg p-3 overflow-x-auto text-gray-300 max-h-96 leading-relaxed">
         {text}
       </pre>
       <button
         onClick={copy}
         className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1.5 rounded-md bg-gray-800 hover:bg-gray-700 transition-all"
+        title="Copy to clipboard"
       >
         {copied ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-gray-400" />}
       </button>
@@ -92,10 +94,10 @@ export default function SkillDetailModal({ skill, onClose, onDelete, onEdit }) {
         </div>
 
         {/* Tabs */}
-        <div className="flex items-center gap-1 px-6 pt-4 pb-2">
-          {['overview', 'tools', 'prompts', 'mcp', 'metadata'].map(t => (
+        <div className="flex items-center gap-1 px-6 pt-4 pb-2 flex-wrap">
+          {['overview', 'tools', 'prompts', 'mcp', 'yaml', 'metadata'].map(t => (
             <TabButton key={t} active={tab === t} onClick={() => setTab(t)}>
-              {t.charAt(0).toUpperCase() + t.slice(1)}
+              {t === 'yaml' ? '📄 YAML' : t.charAt(0).toUpperCase() + t.slice(1)}
               {t === 'tools' && tools.length > 0 && <span className="ml-1 text-gray-500">({tools.length})</span>}
               {t === 'prompts' && prompts.length > 0 && <span className="ml-1 text-gray-500">({prompts.length})</span>}
             </TabButton>
@@ -206,6 +208,21 @@ export default function SkillDetailModal({ skill, onClose, onDelete, onEdit }) {
                 </code>
                 <p className="text-xs text-indigo-400/60 mt-1">
                   Connect your MCP client to this Skills Registry endpoint to access all registered skills.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {tab === 'yaml' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="section-header">SKILL.md — YAML Definition</p>
+                <span className="text-xs text-gray-600">Full skill spec in YAML format</span>
+              </div>
+              <JsonBlock data={skillToYaml(skill)} isYaml />
+              <div className="bg-indigo-950/30 border border-indigo-800/30 rounded-lg p-3">
+                <p className="text-xs text-indigo-400/80">
+                  Save this as <code className="font-mono">SKILL.md</code> in any Claude Code workspace to register this skill.
                 </p>
               </div>
             </div>
