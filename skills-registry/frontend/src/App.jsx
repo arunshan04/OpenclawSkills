@@ -39,6 +39,7 @@ export default function App() {
   const [view, setView] = useState('grid')
   const [selectedSkill, setSelectedSkill] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
+  const [editSkill, setEditSkill] = useState(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -67,13 +68,19 @@ export default function App() {
     setStats(prev => prev ? { ...prev, total: prev.total - 1, active: prev.active - 1 } : prev)
   }
 
-  const handleEdit = () => {
+  const handleEdit = (skill) => {
     setSelectedSkill(null)
+    setEditSkill(skill)
     setShowAdd(true)
   }
 
   const handleCreated = (skill) => {
     setSkills(prev => [skill, ...prev])
+    loadData()
+  }
+
+  const handleUpdated = (skill) => {
+    setSkills(prev => prev.map(s => s.id === skill.id ? skill : s))
     loadData()
   }
 
@@ -265,8 +272,10 @@ export default function App() {
       {showAdd && (
         <AddSkillModal
           existingSkills={skills}
-          onClose={() => setShowAdd(false)}
+          editSkill={editSkill}
+          onClose={() => { setShowAdd(false); setEditSkill(null) }}
           onCreated={handleCreated}
+          onUpdated={handleUpdated}
         />
       )}
     </div>

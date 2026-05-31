@@ -127,16 +127,38 @@ function PromptEditor({ prompts, onChange }) {
   )
 }
 
-export default function AddSkillModal({ existingSkills = [], onClose, onCreated }) {
-  const [mode, setMode] = useState('manual') // manual | llm
+export default function AddSkillModal({ existingSkills = [], editSkill = null, onClose, onCreated, onUpdated }) {
+  const isEdit = !!editSkill
+  const [mode, setMode] = useState('manual')
   const [saving, setSaving] = useState(false)
   const [activeSection, setActiveSection] = useState('basic')
 
-  const [form, setForm] = useState({
-    name: '', description: '', category: 'General',
-    icon: '🔧', icon_bg_color: '#6366f1',
-    tags: [], version: '1.0.0', author: '', status: 'active',
-    tools: [], prompts: [], resources: [], mcp_config: {}, source: 'manual', metadata: {}
+  const [form, setForm] = useState(() => {
+    if (editSkill) {
+      return {
+        name: editSkill.name || '',
+        description: editSkill.description || '',
+        category: editSkill.category || 'General',
+        icon: editSkill.icon || '🔧',
+        icon_bg_color: editSkill.icon_bg_color || '#6366f1',
+        tags: Array.isArray(editSkill.tags) ? editSkill.tags : [],
+        version: editSkill.version || '1.0.0',
+        author: editSkill.author || '',
+        status: editSkill.status || 'active',
+        tools: Array.isArray(editSkill.tools) ? editSkill.tools : [],
+        prompts: Array.isArray(editSkill.prompts) ? editSkill.prompts : [],
+        resources: Array.isArray(editSkill.resources) ? editSkill.resources : [],
+        mcp_config: editSkill.mcp_config || {},
+        source: editSkill.source || 'manual',
+        metadata: editSkill.metadata || {},
+      }
+    }
+    return {
+      name: '', description: '', category: 'General',
+      icon: '🔧', icon_bg_color: '#6366f1',
+      tags: [], version: '1.0.0', author: '', status: 'active',
+      tools: [], prompts: [], resources: [], mcp_config: {}, source: 'manual', metadata: {}
+    }
   })
 
   const update = (field, val) => setForm(f => ({ ...f, [field]: val }))
@@ -157,12 +179,18 @@ export default function AddSkillModal({ existingSkills = [], onClose, onCreated 
         tools: form.tools.filter(t => t.name.trim()),
         prompts: form.prompts.filter(p => p.name.trim()),
       }
-      const created = await skillsApi.create(payload)
-      toast.success(`Skill "${created.name}" created!`)
-      onCreated(created)
+      if (isEdit) {
+        const updated = await skillsApi.update(editSkill.id, payload)
+        toast.success(`Skill "${updated.name}" updated!`)
+        onUpdated(updated)
+      } else {
+        const created = await skillsApi.create(payload)
+        toast.success(`Skill "${created.name}" created!`)
+        onCreated(created)
+      }
       onClose()
     } catch (e) {
-      const msg = e.response?.data?.detail || e.message || 'Failed to create skill'
+      const msg = e.response?.data?.detail || e.message || `Failed to ${isEdit ? 'update' : 'create'} skill`
       toast.error(msg)
     } finally {
       setSaving(false)
@@ -175,33 +203,35 @@ export default function AddSkillModal({ existingSkills = [], onClose, onCreated 
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-800 sticky top-0 bg-gray-900 z-10 rounded-t-2xl">
           <div>
-            <h2 className="text-lg font-bold text-white">Add New Skill</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Create manually or let Claude design it</p>
+            <h2 className="text-lg font-bold text-white">{isEdit ? `Edit: ${editSkill.name}` : 'Add New Skill'}</h2>
+            <p className="text-xs text-gray-500 mt-0.5">{isEdit ? 'Update skill details below' : 'Create manually or let Claude design it'}</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-800 transition-colors">
             <X className="w-4 h-4 text-gray-400" />
           </button>
         </div>
 
-        {/* Mode toggle */}
-        <div className="flex gap-2 p-4 border-b border-gray-800">
-          <button
-            onClick={() => setMode('manual')}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${
-              mode === 'manual' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
-            }`}
-          >
-            Manual Entry
-          </button>
-          <button
-            onClick={() => setMode('llm')}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
-              mode === 'llm' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
-            }`}
-          >
-            <Sparkles className="w-4 h-4" /> AI Research
-          </button>
-        </div>
+        {/* Mode toggle — only shown when creating */}
+        {!isEdit && (
+          <div className="flex gap-2 p-4 border-b border-gray-800">
+            <button
+              onClick={() => setMode('manual')}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${
+                mode === 'manual' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+              }`}
+            >
+              Manual Entry
+            </button>
+            <button
+              onClick={() => setMode('llm')}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                mode === 'llm' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+              }`}
+            >
+              <Sparkles className="w-4 h-4" /> AI Research
+            </button>
+          </div>
+        )}
 
         <div className="p-6">
           {mode === 'llm' ? (
@@ -333,7 +363,7 @@ export default function AddSkillModal({ existingSkills = [], onClose, onCreated 
           <div className="flex gap-3 px-6 pb-6">
             <button onClick={onClose} className="btn-secondary flex-1 justify-center">Cancel</button>
             <button onClick={handleSave} disabled={saving || !form.name.trim()} className="btn-primary flex-1 justify-center">
-              {saving ? 'Creating...' : '+ Create Skill'}
+              {saving ? (isEdit ? 'Saving...' : 'Creating...') : (isEdit ? 'Save Changes' : '+ Create Skill')}
             </button>
           </div>
         )}
