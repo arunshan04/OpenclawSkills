@@ -117,11 +117,15 @@ def list_categories() -> List[str]:
 
 
 # ── FastAPI App ───────────────────────────────────────────────────────────────
+_mcp_http_app = mcp.http_app()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    load_all_dynamic_tools()
-    yield
+    async with _mcp_http_app.lifespan(app):
+        init_db()
+        load_all_dynamic_tools()
+        yield
 
 
 app = FastAPI(
@@ -139,7 +143,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/mcp", mcp.http_app())
+app.mount("/mcp", _mcp_http_app)
 
 
 # ── Tool execution ────────────────────────────────────────────────────────────
