@@ -26,6 +26,7 @@ export function skillToYaml(skill) {
     `  - name: ${t.name || ''}`,
     `    description: ${yamlStr(t.description || '')}`,
     t.input_schema ? `    input_schema: ${JSON.stringify(t.input_schema)}` : null,
+    t.code ? `    code: |\n      ${t.code.replace(/\n/g, '\n      ')}` : null,
   ].filter(Boolean).join('\n')).join('\n')
 
   const promptsYaml = prompts.length === 0 ? '[]' : '\n' + prompts.map(p => [

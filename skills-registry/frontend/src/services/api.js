@@ -14,6 +14,8 @@ export const skillsApi = {
   categories: () => api.get('/skills/categories').then(r => r.data),
   stats: () => api.get('/skills/stats').then(r => r.data),
   research: (data) => api.post('/skills/research', data).then(r => r.data),
+  executeTool: (skillId, toolName, params = {}) =>
+    api.post(`/skills/${skillId}/tools/${toolName}/execute`, { params }).then(r => r.data),
 }
 
 export default api

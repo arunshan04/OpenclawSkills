@@ -1,29 +1,68 @@
 import json
 import uuid
+import inspect
+import traceback
 from datetime import datetime
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import List, Optional, Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastmcp import FastMCP
+from pydantic import BaseModel
 
 from models import SkillCreate, SkillUpdate, LLMResearchRequest, LLMResearchResponse
 from database import init_db, get_db, row_to_dict
 from llm_service import research_skill
+from executor import execute_tool, load_tool_fn
 
 
 # ── MCP Server ────────────────────────────────────────────────────────────────
 mcp = FastMCP(
     name="Skills Registry",
     instructions=(
-        "This MCP server provides access to the Skills Registry, "
-        "a catalog of AI agent capabilities. Use it to discover, search, "
-        "and manage skills that agents can leverage."
+        "This MCP server provides access to the Skills Registry. "
+        "Skills registered here with implemented tools are directly callable. "
+        "Use list_skills to discover available capabilities."
     ),
 )
 
+_registered_tool_names: set[str] = set()
 
+
+def register_skill_tools(tools: list[dict], skill_name: str):
+    """Dynamically register tool implementations with FastMCP."""
+    for tool_def in tools:
+        tool_name = tool_def.get("name", "").strip()
+        code = tool_def.get("code", "").strip()
+        if not tool_name or not code or tool_name in _registered_tool_names:
+            continue
+
+        fn = load_tool_fn(code, tool_name)
+        if fn is None:
+            print(f"[MCP] Skipped '{tool_name}' from '{skill_name}' — load error")
+            continue
+
+        try:
+            mcp.add_tool(fn, name=tool_name, description=tool_def.get("description", ""))
+            _registered_tool_names.add(tool_name)
+            print(f"[MCP] Registered tool: {tool_name} (from '{skill_name}')")
+        except Exception as e:
+            print(f"[MCP] Could not register '{tool_name}': {e}")
+
+
+def load_all_dynamic_tools():
+    """At startup, load and register all tools that have implementations."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT name, tools FROM skills WHERE status='active'"
+        ).fetchall()
+    for row in rows:
+        tools = json.loads(row["tools"]) if isinstance(row["tools"], str) else row["tools"] or []
+        register_skill_tools(tools, row["name"])
+
+
+# ── Built-in registry MCP tools ───────────────────────────────────────────────
 @mcp.tool()
 def list_skills(
     category: Optional[str] = None,
@@ -77,27 +116,18 @@ def list_categories() -> List[str]:
         return [r[0] for r in rows]
 
 
-@mcp.tool()
-def get_skill_tools(skill_id: str) -> List[dict]:
-    """Get the list of tools provided by a specific skill."""
-    with get_db() as conn:
-        row = conn.execute("SELECT tools FROM skills WHERE id = ?", (skill_id,)).fetchone()
-        if not row:
-            return []
-        return json.loads(row[0]) if isinstance(row[0], str) else row[0]
-
-
 # ── FastAPI App ───────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    load_all_dynamic_tools()
     yield
 
 
 app = FastAPI(
     title="Skills Registry API",
-    description="REST API and MCP server for managing AI agent skills",
-    version="1.0.0",
+    description="REST API + MCP server with embedded tool execution",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -109,8 +139,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount MCP server under /mcp
 app.mount("/mcp", mcp.http_app())
+
+
+# ── Tool execution ────────────────────────────────────────────────────────────
+class ExecuteRequest(BaseModel):
+    params: dict[str, Any] = {}
+
+
+@app.post("/skills/{skill_id}/tools/{tool_name}/execute")
+def api_execute_tool(skill_id: str, tool_name: str, req: ExecuteRequest):
+    """Execute a tool's embedded Python code with provided parameters."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM skills WHERE id = ?", (skill_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Skill not found")
+
+    skill = row_to_dict(row)
+    tools = skill.get("tools", [])
+    tool_def = next((t for t in tools if t.get("name") == tool_name), None)
+
+    if not tool_def:
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found in skill")
+
+    code = (tool_def.get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Tool has no implementation. Add Python code first.")
+
+    try:
+        result = execute_tool(code, tool_name, req.params)
+        return {"ok": True, "result": result, "tool": tool_name}
+    except TimeoutError as e:
+        raise HTTPException(status_code=408, detail=str(e))
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/mcp/reload")
+def api_reload_tools():
+    """Re-scan the DB and register any newly added tool implementations with FastMCP."""
+    before = len(_registered_tool_names)
+    load_all_dynamic_tools()
+    after = len(_registered_tool_names)
+    return {"registered_tools": after, "newly_added": after - before}
 
 
 # ── REST Endpoints ────────────────────────────────────────────────────────────
@@ -153,11 +224,15 @@ def api_stats():
         active = conn.execute("SELECT COUNT(*) FROM skills WHERE status='active'").fetchone()[0]
         categories = conn.execute("SELECT COUNT(DISTINCT category) FROM skills").fetchone()[0]
         llm_gen = conn.execute("SELECT COUNT(*) FROM skills WHERE source='llm_generated'").fetchone()[0]
+        with_code = conn.execute(
+            "SELECT COUNT(*) FROM skills WHERE tools LIKE '%\"code\"%'"
+        ).fetchone()[0]
         return {
             "total": total,
             "active": active,
             "categories": categories,
             "llm_generated": llm_gen,
+            "with_implementations": with_code,
         }
 
 
@@ -175,10 +250,10 @@ def api_create_skill(skill: SkillCreate):
     skill_id = f"skill-{uuid.uuid4().hex[:12]}"
     now = datetime.utcnow().isoformat()
     with get_db() as conn:
-        # Check name uniqueness
         existing = conn.execute("SELECT id FROM skills WHERE name = ?", (skill.name,)).fetchone()
         if existing:
             raise HTTPException(status_code=409, detail=f"Skill '{skill.name}' already exists")
+        tools_data = [t.model_dump() for t in skill.tools]
         conn.execute("""
             INSERT INTO skills
             (id, name, description, category, icon, icon_bg_color, tags, version, author, status,
@@ -188,14 +263,13 @@ def api_create_skill(skill: SkillCreate):
             skill_id, skill.name, skill.description, skill.category,
             skill.icon, skill.icon_bg_color,
             json.dumps(skill.tags), skill.version, skill.author, skill.status,
-            json.dumps([t.model_dump() for t in skill.tools]),
+            json.dumps(tools_data),
             json.dumps([p.model_dump() for p in skill.prompts]),
             json.dumps([r.model_dump() for r in skill.resources]),
-            json.dumps(skill.mcp_config),
-            skill.source,
-            json.dumps(skill.metadata),
+            json.dumps(skill.mcp_config), skill.source, json.dumps(skill.metadata),
             now, now
         ))
+    register_skill_tools(tools_data, skill.name)
     return api_get_skill(skill_id)
 
 
@@ -210,11 +284,15 @@ def api_update_skill(skill_id: str, update: SkillUpdate):
         now = datetime.utcnow().isoformat()
         data = update.model_dump(exclude_none=True)
 
-        # Serialize list/dict fields
         for field in ["tags", "mcp_config", "metadata"]:
             if field in data:
                 data[field] = json.dumps(data[field])
-        for field in ["tools", "prompts", "resources"]:
+
+        tools_data = None
+        if "tools" in data:
+            tools_data = [item.model_dump() for item in data["tools"]]
+            data["tools"] = json.dumps(tools_data)
+        for field in ["prompts", "resources"]:
             if field in data:
                 data[field] = json.dumps([item.model_dump() for item in data[field]])
 
@@ -223,9 +301,10 @@ def api_update_skill(skill_id: str, update: SkillUpdate):
 
         set_clause = ", ".join(f"{k} = ?" for k in data)
         values = list(data.values()) + [now, skill_id]
-        conn.execute(
-            f"UPDATE skills SET {set_clause}, updated_at = ? WHERE id = ?", values
-        )
+        conn.execute(f"UPDATE skills SET {set_clause}, updated_at = ? WHERE id = ?", values)
+
+    if tools_data:
+        register_skill_tools(tools_data, current.get("name", skill_id))
     return api_get_skill(skill_id)
 
 
@@ -255,7 +334,12 @@ def api_research_skill(request: LLMResearchRequest):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    return {
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "registered_tools": len(_registered_tool_names),
+        "tools": sorted(_registered_tool_names),
+    }
 
 
 if __name__ == "__main__":

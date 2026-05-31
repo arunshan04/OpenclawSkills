@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { X, Wrench, Zap, Database, Copy, Trash2, Edit, CheckCircle, Tag, User, Clock, Server } from 'lucide-react'
+import { X, Wrench, Zap, Database, Copy, Trash2, Edit, CheckCircle, Tag, User, Clock, Server, Code } from 'lucide-react'
 import { skillToYaml } from '../services/yaml'
+import ToolTester from './ToolTester'
 
 function JsonBlock({ data, isYaml = false }) {
   const [copied, setCopied] = useState(false)
@@ -152,17 +153,31 @@ export default function SkillDetailModal({ skill, onClose, onDelete, onEdit }) {
                 <p className="text-sm text-gray-500 text-center py-8">No tools defined for this skill.</p>
               ) : tools.map((tool, i) => (
                 <div key={i} className="bg-gray-950 border border-gray-800 rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="flex items-center gap-2 mb-1">
                     <Wrench className="w-4 h-4 text-indigo-400 flex-shrink-0" />
                     <code className="text-sm font-mono text-indigo-300 font-medium">{tool.name}</code>
+                    {tool.code
+                      ? <span className="ml-auto badge bg-emerald-900/40 text-emerald-400 border border-emerald-800/50"><Code className="w-3 h-3 mr-1" />implemented</span>
+                      : <span className="ml-auto badge bg-gray-800 text-gray-500 border border-gray-700">no code</span>
+                    }
                   </div>
-                  <p className="text-xs text-gray-400 mb-2">{tool.description}</p>
+                  <p className="text-xs text-gray-400 mb-3">{tool.description}</p>
+
+                  {tool.code && (
+                    <div className="mb-3">
+                      <p className="text-xs text-gray-600 mb-1 flex items-center gap-1"><Code className="w-3 h-3" /> Implementation</p>
+                      <JsonBlock data={tool.code} isYaml />
+                    </div>
+                  )}
+
                   {tool.input_schema && (
-                    <div>
+                    <div className="mb-2">
                       <p className="text-xs text-gray-600 mb-1">Input Schema</p>
                       <JsonBlock data={tool.input_schema} />
                     </div>
                   )}
+
+                  <ToolTester skill={skill} tool={tool} />
                 </div>
               ))}
             </div>

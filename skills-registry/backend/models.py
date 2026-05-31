@@ -6,6 +6,7 @@ class ToolDef(BaseModel):
     name: str
     description: str
     input_schema: Optional[Dict[str, Any]] = None
+    code: Optional[str] = None
 
 
 class PromptDef(BaseModel):

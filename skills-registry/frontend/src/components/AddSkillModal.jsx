@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { X, Plus, Trash2, Sparkles, Wrench, Zap, Copy, CheckCircle, ChevronDown } from 'lucide-react'
+import { X, Plus, Trash2, Sparkles, Wrench, Zap, Copy, CheckCircle, ChevronDown, Code } from 'lucide-react'
 import toast from 'react-hot-toast'
 import IconPicker from './IconPicker'
 import LLMResearchPanel from './LLMResearchPanel'
@@ -42,37 +42,81 @@ function TagInput({ tags, onChange }) {
   )
 }
 
+const CODE_TEMPLATE = (name) => `def ${name || 'tool_name'}(param1: str) -> str:
+    """Tool description — available: requests, json, re, datetime, math"""
+    # Write your implementation here
+    result = f"Result: {param1}"
+    return result`
+
 function ToolEditor({ tools, onChange }) {
-  const add = () => onChange([...tools, { name: '', description: '', input_schema: null }])
+  const [openCode, setOpenCode] = useState({})
+  const add = () => onChange([...tools, { name: '', description: '', input_schema: null, code: '' }])
   const update = (i, field, val) => {
     const next = [...tools]
     next[i] = { ...next[i], [field]: val }
     onChange(next)
   }
   const remove = (i) => onChange(tools.filter((_, idx) => idx !== i))
+  const toggleCode = (i) => setOpenCode(s => ({ ...s, [i]: !s[i] }))
 
   return (
     <div className="space-y-2">
       {tools.map((tool, i) => (
-        <div key={i} className="bg-gray-950 border border-gray-800 rounded-lg p-3 space-y-2">
-          <div className="flex items-center gap-2">
-            <Wrench className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+        <div key={i} className="bg-gray-950 border border-gray-800 rounded-lg overflow-hidden">
+          <div className="p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Wrench className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+              <input
+                value={tool.name}
+                onChange={e => update(i, 'name', e.target.value)}
+                placeholder="tool_name"
+                className="input font-mono text-xs py-1.5 flex-1"
+              />
+              <button onClick={() => remove(i)} className="p-1 hover:text-red-400 text-gray-600 transition-colors">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
             <input
-              value={tool.name}
-              onChange={e => update(i, 'name', e.target.value)}
-              placeholder="tool_name"
-              className="input font-mono text-xs py-1.5 flex-1"
+              value={tool.description}
+              onChange={e => update(i, 'description', e.target.value)}
+              placeholder="Tool description..."
+              className="input text-xs py-1.5"
             />
-            <button onClick={() => remove(i)} className="p-1 hover:text-red-400 text-gray-600 transition-colors">
-              <Trash2 className="w-3.5 h-3.5" />
+            <button
+              onClick={() => {
+                if (!tool.code) update(i, 'code', CODE_TEMPLATE(tool.name))
+                toggleCode(i)
+              }}
+              className={`flex items-center gap-1.5 text-xs font-medium transition-colors ${
+                tool.code ? 'text-emerald-400 hover:text-emerald-300' : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              <Code className="w-3 h-3" />
+              {tool.code ? 'Edit Implementation' : '+ Add Python Code'}
+              {tool.code && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />}
             </button>
           </div>
-          <input
-            value={tool.description}
-            onChange={e => update(i, 'description', e.target.value)}
-            placeholder="Tool description..."
-            className="input text-xs py-1.5"
-          />
+
+          {openCode[i] && (
+            <div className="border-t border-gray-800">
+              <div className="flex items-center justify-between px-3 py-1.5 bg-gray-900">
+                <span className="text-xs font-mono text-emerald-400">Python Implementation</span>
+                <span className="text-xs text-gray-600">Function name must match tool name</span>
+              </div>
+              <textarea
+                value={tool.code || ''}
+                onChange={e => update(i, 'code', e.target.value)}
+                className="w-full bg-gray-950 text-gray-200 text-xs font-mono p-3 min-h-[180px] resize-y focus:outline-none focus:ring-1 focus:ring-indigo-500 leading-relaxed"
+                spellCheck={false}
+                placeholder={CODE_TEMPLATE(tool.name)}
+              />
+              <div className="px-3 py-1.5 bg-gray-900 border-t border-gray-800">
+                <p className="text-xs text-gray-600">
+                  Available: <code className="text-gray-500">requests</code>, <code className="text-gray-500">json</code>, <code className="text-gray-500">re</code>, <code className="text-gray-500">datetime</code>, <code className="text-gray-500">math</code>, <code className="text-gray-500">uuid</code>
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       ))}
       <button onClick={add} className="btn-secondary text-xs py-1.5 w-full justify-center">
