@@ -1,6 +1,6 @@
 import os
 import json
-import anthropic
+import httpx
 from models import LLMResearchResponse, ToolDef, PromptDef, ResourceDef
 
 ICON_SUGGESTIONS = {
@@ -19,18 +19,7 @@ COLOR_SUGGESTIONS = {
     "DevOps": "#f43f5e"
 }
 
-
-def research_skill(query: str, category: str = None, existing_skills: list = None) -> LLMResearchResponse:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY not set")
-
-    client = anthropic.Anthropic(api_key=api_key)
-
-    existing_list = "\n".join(f"- {s}" for s in (existing_skills or []))
-    category_hint = f"Preferred category: {category}" if category else ""
-
-    system_prompt = """You are a Skills Registry architect. When given a skill requirement, you generate a comprehensive skill definition for an MCP (Model Context Protocol) registry.
+SYSTEM_PROMPT = """You are a Skills Registry architect. When given a skill requirement, you generate a comprehensive skill definition for an MCP (Model Context Protocol) registry.
 
 A skill defines capabilities that an AI agent can use. Each skill has:
 - Tools (functions the AI can call)
@@ -40,14 +29,14 @@ A skill defines capabilities that an AI agent can use. Each skill has:
 
 Always return valid JSON matching the exact schema provided."""
 
-    user_prompt = f"""Research and design a skill for the following requirement:
+USER_PROMPT_TEMPLATE = """Research and design a skill for the following requirement:
 
 REQUIREMENT: {query}
 
 {category_hint}
 
 Existing skills in registry (avoid duplication):
-{existing_list if existing_list else "None"}
+{existing_list}
 
 Return a JSON object with this EXACT structure:
 {{
@@ -68,7 +57,7 @@ Return a JSON object with this EXACT structure:
         }},
         "required": ["param_name"]
       }},
-      "code": "def tool_function_name(param_name: str) -> str:\n    # Implementation using only these available modules:\n    # requests, json, re, math, datetime, uuid, os, pathlib, subprocess, shutil\n    # No import statements needed — modules are pre-loaded\n    result = f\"Result for {{param_name}}\"\n    return result"
+      "code": "def tool_function_name(param_name: str) -> str:\\n    # Implementation using only these available modules:\\n    # requests, json, re, math, datetime, uuid, os, pathlib, subprocess, shutil\\n    # No import statements needed — modules are pre-loaded\\n    result = f\\"Result for {{param_name}}\\"\\n    return result"
     }}
   ],
   "prompts": [
@@ -101,24 +90,77 @@ IMPORTANT for tools:
 
 Generate 2-4 meaningful tools with real implementations and 0-2 prompts."""
 
+
+def _extract_json(text: str) -> dict:
+    """Extract and parse the first JSON object from a response string."""
+    text = text.strip()
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
+    # Some models prepend prose before the JSON object
+    start = text.find("{")
+    if start > 0:
+        text = text[start:]
+    return json.loads(text)
+
+
+def _call_ollama(user_prompt: str) -> str:
+    """Call Ollama's native /api/chat endpoint."""
+    host = os.environ["OLLAMA_HOST"].rstrip("/")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2")
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": user_prompt},
+        ],
+        "stream": False,
+        "options": {"temperature": 0},
+    }
+
+    with httpx.Client(timeout=300) as client:
+        r = client.post(f"{host}/api/chat", json=payload)
+        r.raise_for_status()
+        data = r.json()
+        return data["message"]["content"]
+
+
+def _call_anthropic(user_prompt: str) -> str:
+    """Call Anthropic Claude API."""
+    import anthropic
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY not set")
+    client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model="claude-opus-4-8",
         max_tokens=2048,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}]
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+    return message.content[0].text.strip()
+
+
+def research_skill(query: str, category: str = None, existing_skills: list = None) -> LLMResearchResponse:
+    existing_list = "\n".join(f"- {s}" for s in (existing_skills or []))
+    category_hint = f"Preferred category: {category}" if category else ""
+
+    user_prompt = USER_PROMPT_TEMPLATE.format(
+        query=query,
+        category_hint=category_hint,
+        existing_list=existing_list if existing_list else "None",
     )
 
-    response_text = message.content[0].text.strip()
+    ollama_host = os.getenv("OLLAMA_HOST", "").strip()
+    if ollama_host:
+        response_text = _call_ollama(user_prompt)
+    else:
+        response_text = _call_anthropic(user_prompt)
 
-    # Extract JSON from response
-    if "```json" in response_text:
-        response_text = response_text.split("```json")[1].split("```")[0].strip()
-    elif "```" in response_text:
-        response_text = response_text.split("```")[1].split("```")[0].strip()
+    data = _extract_json(response_text)
 
-    data = json.loads(response_text)
-
-    # Ensure icon and color are sensible
     cat = data.get("category", "General")
     if not data.get("icon") or data["icon"] == "🔧":
         data["icon"] = ICON_SUGGESTIONS.get(cat, "🔧")
