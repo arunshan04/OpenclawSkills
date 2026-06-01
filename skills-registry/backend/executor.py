@@ -22,11 +22,8 @@ def _build_namespace() -> dict:
             ns[alias] = importlib.import_module(mod)
         except ImportError:
             pass
-    try:
-        import requests
-        ns["requests"] = requests
-    except ImportError:
-        pass
+    import requests          # required — listed in requirements.txt
+    ns["requests"] = requests
 
     import os, pathlib, subprocess, shutil, glob
     ns["os"] = os
