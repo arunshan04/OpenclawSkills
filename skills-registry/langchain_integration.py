@@ -10,18 +10,55 @@ Two approaches:
               Reads skill definitions and builds LangChain tools on the fly.
               Works even without the MCP client library.
 
+LLM provider (auto-detected at runtime):
+  - Set OLLAMA_HOST to use a local/remote Ollama server (e.g. ngrok URL)
+  - Set OLLAMA_MODEL to choose the model (default: llama3.2)
+  - Falls back to Anthropic claude-opus-4-8 when OLLAMA_HOST is not set
+
 Install:
-    pip install langchain langchain-anthropic langgraph
+    pip install langchain langchain-anthropic langchain-ollama langgraph
     pip install langchain-mcp-adapters          # only needed for Approach A
 """
 
 import asyncio
 import json
+import os
+import warnings
 import requests as _requests
 from typing import Any
 
+warnings.filterwarnings("ignore", category=DeprecationWarning)  # suppress langgraph v1 migration warnings
+
+
 REGISTRY_REST  = "http://localhost:8000"
 REGISTRY_MCP   = "http://localhost:8001/mcp"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model selection helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_model():
+    """
+    Return a LangChain chat model.
+    Uses Ollama when OLLAMA_HOST is set, otherwise Anthropic.
+    """
+    ollama_host = os.getenv("OLLAMA_HOST", "").strip().rstrip("/")
+    if ollama_host:
+        from langchain_ollama import ChatOllama
+        model_name = os.getenv("OLLAMA_MODEL", "llama3.2")
+        print(f"[model] Using Ollama  host={ollama_host}  model={model_name}")
+        return ChatOllama(
+            model=model_name,
+            base_url=ollama_host,
+            temperature=0,
+            think=False,       # disable qwen3 chain-of-thought
+            num_predict=4096,
+        )
+    else:
+        from langchain_anthropic import ChatAnthropic
+        print("[model] Using Anthropic claude-opus-4-8")
+        return ChatAnthropic(model="claude-opus-4-8", temperature=0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -32,7 +69,6 @@ async def run_agent_via_mcp(user_message: str):
     """Connect via the MCP protocol — every tool in the registry is available."""
     from langchain_mcp_adapters.client import MultiServerMCPClient
     from langgraph.prebuilt import create_react_agent
-    from langchain_anthropic import ChatAnthropic
 
     async with MultiServerMCPClient({
         "skills_registry": {
@@ -43,7 +79,7 @@ async def run_agent_via_mcp(user_message: str):
         tools = client.get_tools()
         print(f"[MCP] Loaded {len(tools)} tools: {[t.name for t in tools]}")
 
-        model = ChatAnthropic(model="claude-opus-4-8", temperature=0)
+        model = get_model()
         agent = create_react_agent(model, tools)
         result = await agent.ainvoke({
             "messages": [{"role": "user", "content": user_message}]
@@ -75,7 +111,7 @@ def build_langchain_tools(skill_names: list[str] | None = None):
         skill_names: Optional filter — only include these skill names.
                      Pass None to include all active skills.
     """
-    from langchain.tools import StructuredTool
+    from langchain_core.tools import StructuredTool
     from pydantic import create_model, Field
 
     skills = _requests.get(f"{REGISTRY_REST}/skills").json()
@@ -111,7 +147,6 @@ def build_langchain_tools(skill_names: list[str] | None = None):
 
             ArgsSchema = create_model(f"{tool_name}_schema", **fields) if fields else None
 
-            # Capture loop variables
             _skill_id   = skill["id"]
             _tool_name  = tool_name
 
@@ -133,14 +168,12 @@ def build_langchain_tools(skill_names: list[str] | None = None):
     return lc_tools
 
 
-def run_agent_via_rest(user_message: str):
+def run_agent_via_rest(user_message: str, skill_names: list[str] | None = None):
     """Build tools from the registry REST API and run a LangChain agent."""
     from langgraph.prebuilt import create_react_agent
-    from langchain_anthropic import ChatAnthropic
 
-    tools = build_langchain_tools()   # pass skill_names=["Web Search"] to filter
-
-    model = ChatAnthropic(model="claude-opus-4-8", temperature=0)
+    tools = build_langchain_tools(skill_names)
+    model = get_model()
     agent = create_react_agent(model, tools)
     result = agent.invoke({
         "messages": [{"role": "user", "content": user_message}]
@@ -151,16 +184,14 @@ def run_agent_via_rest(user_message: str):
 # ─────────────────────────────────────────────────────────────────────────────
 # Approach B+ — Registry as a Tool Itself (meta-tool pattern)
 # ─────────────────────────────────────────────────────────────────────────────
-# Give the agent access to the REGISTRY tools (list_skills, search_skills, etc.)
-# so it can discover and reason about available capabilities dynamically.
 
 def build_registry_meta_tools():
     """
-    Returns LangChain tools for the 4 built-in registry MCP tools
+    Returns LangChain tools for the 4 built-in registry endpoints
     (list_skills, get_skill, search_skills, list_categories).
     The agent can use these to discover what's available.
     """
-    from langchain.tools import StructuredTool
+    from langchain_core.tools import StructuredTool
     from pydantic import BaseModel
 
     class SearchInput(BaseModel):
@@ -189,8 +220,7 @@ def build_registry_meta_tools():
         if not r.ok:
             return f"Skill '{skill_id}' not found"
         s = r.json()
-        tools = s.get("tools", [])
-        tool_names = [t["name"] for t in tools if isinstance(t, dict)]
+        tool_names = [t["name"] for t in s.get("tools", []) if isinstance(t, dict)]
         return f"{s['name']}: {s['description']}\nTools: {tool_names}\nCategory: {s['category']}"
 
     def list_categories_fn() -> str:
@@ -199,10 +229,10 @@ def build_registry_meta_tools():
         return ", ".join(f"{c['category']} ({c['count']})" for c in cats)
 
     return [
-        StructuredTool.from_function(list_skills_fn,   name="list_skills",    description="List all available skills in the registry, optionally filter by category"),
-        StructuredTool.from_function(search_skills_fn,  name="search_skills",  description="Search skills by name, description or tags", args_schema=SearchInput),
-        StructuredTool.from_function(get_skill_fn,      name="get_skill",      description="Get details about a specific skill by ID", args_schema=GetInput),
-        StructuredTool.from_function(list_categories_fn,name="list_categories",description="List all skill categories in the registry"),
+        StructuredTool.from_function(list_skills_fn,    name="list_skills",     description="List all available skills in the registry, optionally filter by category"),
+        StructuredTool.from_function(search_skills_fn,  name="search_skills",   description="Search skills by name, description or tags", args_schema=SearchInput),
+        StructuredTool.from_function(get_skill_fn,      name="get_skill",       description="Get details about a specific skill by ID", args_schema=GetInput),
+        StructuredTool.from_function(list_categories_fn,name="list_categories", description="List all skill categories in the registry"),
     ]
 
 
@@ -211,24 +241,36 @@ def build_registry_meta_tools():
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import os
-
-    # Make sure ANTHROPIC_API_KEY is set
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        print("Set ANTHROPIC_API_KEY env var first")
+    ollama_host = os.getenv("OLLAMA_HOST", "")
+    if not ollama_host and not os.getenv("ANTHROPIC_API_KEY"):
+        print("Set OLLAMA_HOST (for Ollama) or ANTHROPIC_API_KEY (for Anthropic) first")
         exit(1)
 
     print("=" * 60)
-    print("Option 1: Registry tools + skill tools together (REST)")
+    print("Test 1: list_skills meta-tool — what's in the registry?")
     print("=" * 60)
-    all_tools = build_registry_meta_tools() + build_langchain_tools()
-    print(f"Total tools: {len(all_tools)} → {[t.name for t in all_tools]}")
-
-    answer = run_agent_via_rest("Search the web for latest Python 3.13 features")
-    print("\nAgent answer:", answer)
+    meta_tools = build_registry_meta_tools()
+    model = get_model()
+    from langgraph.prebuilt import create_react_agent  # noqa: PLC0415
+    agent = create_react_agent(model, meta_tools)
+    result = agent.invoke({"messages": [{"role": "user", "content":
+        "List all skills in the registry and summarise what each one does in one line."}]})
+    print("Answer:", result["messages"][-1].content)
 
     print("\n" + "=" * 60)
-    print("Option 2: Via MCP protocol (auto-discovers all tools)")
+    print("Test 2: Unit conversion via REST skill tool")
     print("=" * 60)
-    answer = asyncio.run(run_agent_via_mcp("List all skills in the registry"))
-    print("\nAgent answer:", answer)
+    answer = run_agent_via_rest(
+        "Convert 100 km to miles using the unit converter skill",
+        skill_names=["Unit Converter"],
+    )
+    print("Answer:", answer)
+
+    print("\n" + "=" * 60)
+    print("Test 3: Weather via REST skill tool")
+    print("=" * 60)
+    answer = run_agent_via_rest(
+        "What is the current weather in London?",
+        skill_names=["Weather Forecast"],
+    )
+    print("Answer:", answer)
