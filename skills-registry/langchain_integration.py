@@ -184,6 +184,9 @@ def _wrap(text: str, width: int = 88, indent: str = "") -> str:
     return textwrap.fill(text, width=width, initial_indent=indent, subsequent_indent=indent)
 
 
+_META_TOOL_NAMES = {"list_skills", "search_skills", "get_skill", "list_categories"}
+
+
 def run_chat(tools: list, model, model_label: str, verbose: bool = False):
     from langgraph.prebuilt import create_react_agent
     from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
@@ -191,13 +194,17 @@ def run_chat(tools: list, model, model_label: str, verbose: bool = False):
     agent = create_react_agent(model, tools)
     history: list = []
 
-    tool_map = {t.name: t for t in tools}
+    meta   = [t for t in tools if t.name in _META_TOOL_NAMES]
+    skill  = [t for t in tools if t.name not in _META_TOOL_NAMES]
 
     print()
     print("─" * 60)
-    print(f"  Skills Registry Chat Agent")
-    print(f"  Model : {model_label}")
-    print(f"  Tools : {len(tools)} loaded — " + ", ".join(t.name for t in tools))
+    print("  Skills Registry Chat Agent")
+    print(f"  Model  : {model_label}")
+    if meta:
+        print(f"  Skills : {', '.join(t.name for t in meta)}")
+    if skill:
+        print(f"  Tools  : {', '.join(t.name for t in skill)}")
     print("─" * 60)
     print("  Type your message and press Enter.")
     print("  Commands: /tools  /clear  /quit")
@@ -223,9 +230,14 @@ def run_chat(tools: list, model, model_label: str, verbose: bool = False):
             print("[history cleared]\n")
             continue
         if user_input.lower() == "/tools":
-            print("\nLoaded tools:")
-            for t in tools:
-                print(f"  • {t.name}: {t.description[:80]}")
+            if meta:
+                print("\nRegistry (skill discovery):")
+                for t in meta:
+                    print(f"  • {t.name}: {t.description[:80]}")
+            if skill:
+                print("\nSkill tools (callable):")
+                for t in skill:
+                    print(f"  • {t.name}: {t.description[:80]}")
             print()
             continue
 
@@ -272,7 +284,7 @@ if __name__ == "__main__":
               python langchain_integration.py
               python langchain_integration.py --verbose
               python langchain_integration.py --skills "Unit Converter" "Weather Forecast"
-              python langchain_integration.py --meta --verbose
+              python langchain_integration.py --no-meta
               OLLAMA_HOST=http://localhost:11434 python langchain_integration.py
         """),
     )
@@ -280,8 +292,8 @@ if __name__ == "__main__":
                         help="Registry REST base URL (default: http://localhost:8000)")
     parser.add_argument("--skills", nargs="*", metavar="NAME",
                         help="Only load tools from these skill names (default: all)")
-    parser.add_argument("--meta", action="store_true",
-                        help="Include registry meta-tools (list_skills, search_skills, …)")
+    parser.add_argument("--no-meta", action="store_true",
+                        help="Exclude registry discovery tools (list_skills, search_skills, …)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Show tool calls and results in real time")
     args = parser.parse_args()
@@ -295,13 +307,15 @@ if __name__ == "__main__":
         print("Error: set OLLAMA_HOST (Ollama) or ANTHROPIC_API_KEY (Anthropic) first.")
         sys.exit(1)
 
-    # Load tools
-    tools = build_langchain_tools(args.skills)
-    if args.meta:
-        tools = build_registry_meta_tools() + tools
+    # Always include registry meta-tools so the agent knows what skills exist
+    # and can search/discover capabilities dynamically.
+    # Use --no-meta to skip them (e.g. when skill tools already cover everything).
+    skill_tools = build_langchain_tools(args.skills)
+    meta_tools  = [] if args.no_meta else build_registry_meta_tools()
+    tools = meta_tools + skill_tools
 
     if not tools:
-        print("No tools with implementations found. Add some skills via the dashboard first.")
+        print("No tools loaded. Add some skills via the dashboard first.")
         sys.exit(1)
 
     model, model_label = get_model()
