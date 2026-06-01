@@ -117,14 +117,20 @@ def _call_ollama(user_prompt: str) -> str:
             {"role": "user",   "content": user_prompt},
         ],
         "stream": False,
-        "options": {"temperature": 0},
+        "think": False,          # disable qwen3 extended thinking
+        "options": {
+            "temperature": 0,
+            "num_predict": 4096,
+        },
     }
 
     with httpx.Client(timeout=300) as client:
         r = client.post(f"{host}/api/chat", json=payload)
         r.raise_for_status()
         data = r.json()
-        return data["message"]["content"]
+        msg = data["message"]
+        # When think=False the answer is in content; fall back to thinking if content is empty
+        return msg.get("content") or msg.get("thinking", "")
 
 
 def _call_anthropic(user_prompt: str) -> str:

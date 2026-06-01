@@ -61,9 +61,9 @@ def register_skill_tools(tools: list[dict], skill_name: str, override: bool = Fa
     for tool_def in tools:
         tool_name = tool_def.get("name", "").strip()
         has_impl = any([
-            tool_def.get("code", "").strip(),
-            tool_def.get("source_file", "").strip(),
-            tool_def.get("source_url", "").strip(),
+            (tool_def.get("code") or "").strip(),
+            (tool_def.get("source_file") or "").strip(),
+            (tool_def.get("source_url") or "").strip(),
         ])
         if not tool_name or not has_impl:
             continue
