@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 import asyncio
 import time
@@ -6,6 +7,9 @@ import functools
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import List, Optional, Any
+
+from dotenv import load_dotenv
+load_dotenv()   # load .env before anything reads os.environ
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -432,16 +436,26 @@ def api_delete_skill(skill_id: str):
 
 @app.post("/skills/research", response_model=LLMResearchResponse)
 def api_research_skill(request: LLMResearchRequest):
+    ollama_host = os.getenv("OLLAMA_HOST", "").strip()
+    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2")
+    provider = f"ollama/{ollama_model}" if ollama_host else "anthropic/claude-opus-4-8"
+    _log.info("LLM_RESEARCH_START  query=%r  provider=%s", request.query[:80], provider)
+    t0 = time.monotonic()
     try:
         result = research_skill(
             query=request.query,
             category=request.category,
             existing_skills=request.existing_skills or [],
         )
+        ms = round((time.monotonic() - t0) * 1000)
+        _log.info("LLM_RESEARCH_OK  name=%r  provider=%s  ms=%d  tools=%d",
+                  result.name, provider, ms, len(result.tools))
         return result
     except ValueError as e:
+        _log.error("LLM_RESEARCH_FAIL  provider=%s  error=%s", provider, e)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        _log.error("LLM_RESEARCH_FAIL  provider=%s  error=%s", provider, e)
         raise HTTPException(status_code=500, detail=f"LLM research failed: {str(e)}")
 
 
@@ -456,11 +470,15 @@ def api_logs(limit: int = Query(100, le=500), level: Optional[str] = Query(None)
 
 @app.get("/health")
 def health():
+    ollama_host = os.getenv("OLLAMA_HOST", "").strip()
+    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2")
     return {
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
         "registered_tools": len(_registered_tool_names),
         "tools": sorted(_registered_tool_names),
+        "llm_provider": f"ollama/{ollama_model}" if ollama_host else "anthropic/claude-opus-4-8",
+        "ollama_host": ollama_host or None,
     }
 
 
