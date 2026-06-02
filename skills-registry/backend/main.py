@@ -468,6 +468,98 @@ def api_logs(limit: int = Query(100, le=500), level: Optional[str] = Query(None)
     return {"logs": entries[-limit:], "total": len(entries)}
 
 
+# ── Tools Catalog ─────────────────────────────────────────────────────────────
+
+@app.get("/tools/catalog")
+def api_tools_catalog(
+    search: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    has_code: Optional[bool] = Query(None),
+):
+    """Flat catalog of every tool across all active skills, with MCP registration status."""
+    with get_db() as conn:
+        q = "SELECT * FROM skills WHERE status='active'"
+        params: list = []
+        if category:
+            q += " AND category = ?"
+            params.append(category)
+        rows = conn.execute(q, params).fetchall()
+
+    result = []
+    for row in rows:
+        skill = row_to_dict(row)
+        for t in skill.get("tools", []):
+            if not isinstance(t, dict):
+                continue
+            code = (t.get("code") or "").strip()
+            executable = bool(code)
+            if has_code is not None and executable != has_code:
+                continue
+            if search:
+                s = search.lower()
+                if not any(s in (t.get(f) or "").lower() for f in ("name", "description")):
+                    continue
+            result.append({
+                "tool_name": t["name"],
+                "description": t.get("description", ""),
+                "input_schema": t.get("input_schema"),
+                "has_code": executable,
+                "mcp_registered": t["name"] in _registered_tool_names,
+                "skill_id": skill["id"],
+                "skill_name": skill["name"],
+                "skill_category": skill["category"],
+                "skill_icon": skill["icon"],
+                "skill_icon_bg": skill["icon_bg_color"],
+            })
+
+    return result
+
+
+class ToolResearchRequest(BaseModel):
+    prompt: str                            # what the tool should do
+    skill_id: Optional[str] = None         # if set, append the tool to this skill
+
+
+@app.post("/tools/research")
+def api_research_tool(req: ToolResearchRequest):
+    """Use the LLM to generate a single tool from a plain-English prompt.
+    If skill_id is provided the new tool is appended to that skill immediately."""
+    from llm_service import research_tool as _research_tool
+
+    ollama_host  = os.getenv("OLLAMA_HOST", "").strip()
+    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2")
+    provider = f"ollama/{ollama_model}" if ollama_host else "anthropic/claude-opus-4-8"
+    _log.info("TOOL_RESEARCH_START  prompt=%r  provider=%s", req.prompt[:80], provider)
+    t0 = time.monotonic()
+
+    try:
+        tool_def = _research_tool(req.prompt)
+        ms = round((time.monotonic() - t0) * 1000)
+        _log.info("TOOL_RESEARCH_OK  name=%r  provider=%s  ms=%d", tool_def["name"], provider, ms)
+    except Exception as e:
+        _log.error("TOOL_RESEARCH_FAIL  provider=%s  error=%s", provider, e)
+        raise HTTPException(status_code=500, detail=f"Tool research failed: {str(e)}")
+
+    if req.skill_id:
+        with get_db() as conn:
+            row = conn.execute("SELECT * FROM skills WHERE id = ?", (req.skill_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Skill not found")
+            skill = row_to_dict(row)
+            tools = skill.get("tools", [])
+            if any(t.get("name") == tool_def["name"] for t in tools):
+                raise HTTPException(status_code=409, detail=f"Tool '{tool_def['name']}' already exists in this skill")
+            tools.append(tool_def)
+            conn.execute("UPDATE skills SET tools = ?, updated_at = ? WHERE id = ?",
+                         (json.dumps(tools), datetime.utcnow().isoformat(), req.skill_id))
+
+        register_skill_tools([tool_def], skill["name"])
+        _log.info("SKILL_ADD_TOOL  skill=%s  tool=%s", req.skill_id, tool_def["name"])
+        return {"tool": tool_def, "added_to_skill": req.skill_id}
+
+    return {"tool": tool_def, "added_to_skill": None}
+
+
 @app.get("/health")
 def health():
     ollama_host = os.getenv("OLLAMA_HOST", "").strip()

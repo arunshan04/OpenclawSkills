@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Search, Filter, Grid, List, RefreshCw, Sparkles, Settings, X, ChevronDown, Zap, Database, Cpu, ScrollText } from 'lucide-react'
+import { Plus, Search, Filter, Grid, List, RefreshCw, Sparkles, Settings, X, ChevronDown, Zap, Database, Cpu, ScrollText, Wrench } from 'lucide-react'
 import toast from 'react-hot-toast'
 import SkillCard from './components/SkillCard'
 import SkillDetailModal from './components/SkillDetailModal'
 import AddSkillModal from './components/AddSkillModal'
 import LogsPanel from './components/LogsPanel'
+import ToolsCatalog from './components/ToolsCatalog'
 import { skillsApi } from './services/api'
 
 function StatCard({ label, value, icon: Icon, color }) {
@@ -29,6 +30,7 @@ const SORT_OPTIONS = [
 ]
 
 export default function App() {
+  const [tab, setTab] = useState('skills')  // 'skills' | 'tools'
   const [skills, setSkills] = useState([])
   const [categories, setCategories] = useState([])
   const [stats, setStats] = useState(null)
@@ -110,14 +112,38 @@ export default function App() {
               className="hidden sm:flex btn-secondary text-xs py-1.5">
               <Settings className="w-3.5 h-3.5" /> API Docs
             </a>
-            <button onClick={() => setShowAdd(true)} className="btn-primary text-xs">
-              <Plus className="w-3.5 h-3.5" /> Add Skill
-            </button>
+            {tab === 'skills' && (
+              <button onClick={() => setShowAdd(true)} className="btn-primary text-xs">
+                <Plus className="w-3.5 h-3.5" /> Add Skill
+              </button>
+            )}
           </div>
+        </div>
+
+        {/* Tab bar */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex gap-1 border-t border-gray-800">
+          <button
+            onClick={() => setTab('skills')}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${tab === 'skills' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+          >
+            <Database className="w-4 h-4" /> Skills
+          </button>
+          <button
+            onClick={() => setTab('tools')}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${tab === 'tools' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+          >
+            <Wrench className="w-4 h-4" /> Tools Catalog
+          </button>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+
+        {/* Tools Catalog tab */}
+        {tab === 'tools' && <ToolsCatalog />}
+
+        {/* Skills tab */}
+        {tab === 'skills' && <>
         {/* Stats row */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <StatCard label="Total Skills" value={stats?.total} icon={Database} color="bg-indigo-900/50 text-indigo-300" />
@@ -267,6 +293,7 @@ export default function App() {
             </div>
           </div>
         </div>
+        </>}
       </main>
 
       {/* Modals */}

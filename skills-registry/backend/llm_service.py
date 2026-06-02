@@ -187,3 +187,80 @@ def research_skill(query: str, category: str = None, existing_skills: list = Non
         rationale=data.get("rationale", ""),
         metadata=data.get("metadata", {})
     )
+
+
+_TOOL_SYSTEM_PROMPT = """You are an expert Python developer writing tool functions for an AI skill registry.
+A tool is a single Python function that an AI agent can call. It must:
+- Have a clear, snake_case function name
+- Accept typed parameters
+- Return a string result
+- Use only pre-loaded modules: requests, json, re, math, datetime, uuid, os, pathlib, subprocess, shutil
+- NOT use import statements (modules are pre-injected)
+Always return valid JSON only."""
+
+_TOOL_PROMPT = """Write a single tool function for the following requirement:
+
+REQUIREMENT: {prompt}
+
+Return a JSON object with this EXACT structure:
+{{
+  "name": "snake_case_function_name",
+  "description": "One sentence describing what this tool does",
+  "input_schema": {{
+    "type": "object",
+    "properties": {{
+      "param_name": {{"type": "string", "description": "what this param is"}}
+    }},
+    "required": ["param_name"]
+  }},
+  "code": "def snake_case_function_name(param_name: str) -> str:\\n    # implementation\\n    return result"
+}}
+
+Rules for the code:
+- Function name MUST match the "name" field exactly
+- No import statements — modules are pre-loaded: requests, json, re, math, datetime, uuid, os, pathlib
+- Always return a string
+- Write real, working code (not pseudocode)"""
+
+
+def research_tool(prompt: str) -> dict:
+    """Generate a single ToolDef dict from a plain-English prompt."""
+    user_prompt = _TOOL_PROMPT.format(prompt=prompt)
+
+    # Temporarily override system prompt for single-tool generation
+    import anthropic as _ant
+
+    ollama_host = os.getenv("OLLAMA_HOST", "").strip()
+    if ollama_host:
+        model = os.getenv("OLLAMA_MODEL", "llama3.2")
+        host = ollama_host.rstrip("/")
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": _TOOL_SYSTEM_PROMPT},
+                {"role": "user",   "content": user_prompt},
+            ],
+            "stream": False,
+            "think": False,
+            "options": {"temperature": 0, "num_predict": 2048},
+        }
+        import httpx as _httpx
+        with _httpx.Client(timeout=300) as c:
+            r = c.post(f"{host}/api/chat", json=payload)
+            r.raise_for_status()
+            msg = r.json()["message"]
+            response_text = msg.get("content") or msg.get("thinking", "")
+    else:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY not set")
+        client = _ant.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=1024,
+            system=_TOOL_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        response_text = message.content[0].text.strip()
+
+    return _extract_json(response_text)

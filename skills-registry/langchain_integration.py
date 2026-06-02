@@ -168,11 +168,42 @@ def build_registry_meta_tools():
         cats = r.json()
         return ", ".join(f"{c['category']} ({c['count']})" for c in cats)
 
+    class SearchToolsInput(BaseModel):
+        query: str
+
+    def list_tools_fn(mcp_only: bool = False) -> str:
+        params = {}
+        if mcp_only:
+            params["has_code"] = True
+        r = _requests.get(f"{REGISTRY_REST}/tools/catalog", params=params)
+        tools = r.json()
+        if not tools:
+            return "No tools found."
+        lines = []
+        for t in tools:
+            mcp = " [MCP]" if t.get("mcp_registered") else ""
+            lines.append(f"- {t['tool_name']}({', '.join(t.get('input_schema', {}).get('properties', {}).keys())})"
+                         f"  [{t['skill_name']}]{mcp}  — {t['description'][:60]}")
+        return "\n".join(lines)
+
+    def search_tools_fn(query: str) -> str:
+        r = _requests.get(f"{REGISTRY_REST}/tools/catalog", params={"search": query})
+        tools = r.json()
+        if not tools:
+            return f"No tools found matching '{query}'"
+        lines = []
+        for t in tools:
+            params_str = ", ".join(t.get("input_schema", {}).get("properties", {}).keys())
+            lines.append(f"- {t['tool_name']}({params_str})  [{t['skill_name']}]  — {t['description'][:70]}")
+        return "\n".join(lines)
+
     return [
         StructuredTool.from_function(list_skills_fn,    name="list_skills",     description="List all available skills in the registry, optionally filter by category"),
         StructuredTool.from_function(search_skills_fn,  name="search_skills",   description="Search skills by name, description or tags", args_schema=SearchInput),
         StructuredTool.from_function(get_skill_fn,      name="get_skill",       description="Get details about a specific skill by ID", args_schema=GetInput),
         StructuredTool.from_function(list_categories_fn,name="list_categories", description="List all skill categories in the registry"),
+        StructuredTool.from_function(list_tools_fn,     name="list_tools",      description="List all individual tools across all skills with their parameters and MCP status"),
+        StructuredTool.from_function(search_tools_fn,   name="search_tools",    description="Search for specific tools by name, description or function", args_schema=SearchToolsInput),
     ]
 
 
