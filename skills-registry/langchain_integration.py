@@ -227,14 +227,49 @@ def _wrap(text: str, width: int = 88, indent: str = "") -> str:
     return textwrap.fill(text, width=width, initial_indent=indent, subsequent_indent=indent)
 
 
-_META_TOOL_NAMES = {"list_skills", "search_skills", "get_skill", "list_categories"}
+_META_TOOL_NAMES = {
+    "list_skills", "search_skills", "get_skill", "list_categories",
+    "list_tools",  "search_tools",
+}
+
+SYSTEM_PROMPT = """You are a Skills Registry assistant. You help users discover and invoke tools \
+registered across multiple skills in this registry.
+
+## Discovery strategy — always follow this before answering
+
+1. **search_tools(query)**
+   Use this first when the user asks to *do* something or asks what functions/tools exist.
+   It searches individual tool names, descriptions, and parameters across ALL skills.
+   Example triggers: "convert units", "check weather", "generate text", "what tools do X?"
+
+2. **search_skills(query)**
+   Use this when the user asks about *skill groups*, categories, or broad capabilities.
+   It finds entire skills (a collection of related tools) by name, description, or tag.
+   Example triggers: "what skills are there for data?", "find me a productivity skill", \
+"what AI/ML skills exist?"
+
+3. **Use BOTH when the query is ambiguous** — run search_tools AND search_skills in parallel, \
+then synthesise the results for the user.
+
+4. **list_tools()** — use when the user asks "what can you do?" or "show me everything available". \
+   Always combine with list_skills() for a complete picture.
+
+5. **get_skill(skill_id)** — after finding a skill, call this to inspect its full tool list \
+before deciding which tool to invoke.
+
+## Execution rules
+- Never guess a tool's parameters. If unsure, call search_tools or get_skill first.
+- After finding the right tool, call it directly with the user-supplied values.
+- Present results clearly. If a tool returns raw data, format it for readability.
+- If search returns nothing, tell the user and suggest they add a skill via the dashboard.
+"""
 
 
 def run_chat(tools: list, model, model_label: str, verbose: bool = False):
     from langgraph.prebuilt import create_react_agent
     from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
-    agent = create_react_agent(model, tools)
+    agent = create_react_agent(model, tools, prompt=SYSTEM_PROMPT)
     history: list = []
 
     meta   = [t for t in tools if t.name in _META_TOOL_NAMES]
@@ -243,11 +278,11 @@ def run_chat(tools: list, model, model_label: str, verbose: bool = False):
     print()
     print("─" * 60)
     print("  Skills Registry Chat Agent")
-    print(f"  Model  : {model_label}")
+    print(f"  Model     : {model_label}")
     if meta:
-        print(f"  Skills : {', '.join(t.name for t in meta)}")
+        print(f"  Discovery : {', '.join(t.name for t in meta)}")
     if skill:
-        print(f"  Tools  : {', '.join(t.name for t in skill)}")
+        print(f"  Callable  : {', '.join(t.name for t in skill)}")
     print("─" * 60)
     print("  Type your message and press Enter.")
     print("  Commands: /tools  /clear  /quit")
@@ -274,11 +309,11 @@ def run_chat(tools: list, model, model_label: str, verbose: bool = False):
             continue
         if user_input.lower() == "/tools":
             if meta:
-                print("\nRegistry (skill discovery):")
+                print("\nDiscovery tools (search & browse the registry):")
                 for t in meta:
                     print(f"  • {t.name}: {t.description[:80]}")
             if skill:
-                print("\nSkill tools (callable):")
+                print("\nCallable skill tools:")
                 for t in skill:
                     print(f"  • {t.name}: {t.description[:80]}")
             print()
