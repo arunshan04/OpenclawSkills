@@ -12,12 +12,13 @@ Options:
     --meta              Also include registry meta-tools (list_skills, search_skills …)
     --verbose           Show tool calls and results as they happen
 
-LLM provider (auto-detected):
-    OLLAMA_HOST set  →  ChatOllama (OLLAMA_MODEL, default llama3.2)
-    OLLAMA_HOST unset →  ChatAnthropic (ANTHROPIC_API_KEY required)
+LLM provider (auto-detected, first match wins):
+    OLLAMA_HOST set       →  ChatOllama   (OLLAMA_MODEL, default llama3.2)
+    DEEPSEEK_API_KEY set  →  ChatOpenAI   (DEEPSEEK_MODEL, default deepseek-chat)
+    fallback              →  ChatAnthropic (ANTHROPIC_API_KEY required)
 
 Install:
-    pip install langchain langchain-anthropic langchain-ollama langgraph requests
+    pip install langchain langchain-anthropic langchain-ollama langchain-openai langgraph requests
 """
 
 import json
@@ -41,7 +42,7 @@ REGISTRY_MCP  = "http://localhost:8001/mcp"
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_model():
-    """Return ChatOllama when OLLAMA_HOST is set, otherwise ChatAnthropic."""
+    """Return the first configured LLM: Ollama → DeepSeek → Anthropic."""
     ollama_host = os.getenv("OLLAMA_HOST", "").strip().rstrip("/")
     if ollama_host:
         from langchain_ollama import ChatOllama
@@ -53,9 +54,20 @@ def get_model():
             think=False,
             num_predict=4096,
         ), f"ollama/{model_name}"
-    else:
-        from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(model="claude-opus-4-8", temperature=0), "anthropic/claude-opus-4-8"
+
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+    if deepseek_key:
+        from langchain_openai import ChatOpenAI
+        model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        return ChatOpenAI(
+            model=model_name,
+            api_key=deepseek_key,
+            base_url="https://api.deepseek.com",
+            temperature=0,
+        ), f"deepseek/{model_name}"
+
+    from langchain_anthropic import ChatAnthropic
+    return ChatAnthropic(model="claude-opus-4-8", temperature=0), "anthropic/claude-opus-4-8"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,8 +346,8 @@ if __name__ == "__main__":
 
     # Check LLM provider
     ollama_host = os.getenv("OLLAMA_HOST", "").strip()
-    if not ollama_host and not os.getenv("ANTHROPIC_API_KEY"):
-        print("Error: set OLLAMA_HOST (Ollama) or ANTHROPIC_API_KEY (Anthropic) first.")
+    if not ollama_host and not os.getenv("DEEPSEEK_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
+        print("Error: set OLLAMA_HOST, DEEPSEEK_API_KEY, or ANTHROPIC_API_KEY first.")
         sys.exit(1)
 
     # Always include registry meta-tools so the agent knows what skills exist

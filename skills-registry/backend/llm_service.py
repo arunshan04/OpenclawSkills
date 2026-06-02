@@ -133,6 +133,26 @@ def _call_ollama(user_prompt: str) -> str:
         return msg.get("content") or msg.get("thinking", "")
 
 
+def _call_deepseek(user_prompt: str) -> str:
+    """Call DeepSeek API (OpenAI-compatible)."""
+    from openai import OpenAI
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise ValueError("DEEPSEEK_API_KEY not set")
+    model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=4096,
+        temperature=0,
+    )
+    return response.choices[0].message.content.strip()
+
+
 def _call_anthropic(user_prompt: str) -> str:
     """Call Anthropic Claude API."""
     import anthropic
@@ -149,6 +169,15 @@ def _call_anthropic(user_prompt: str) -> str:
     return message.content[0].text.strip()
 
 
+def _pick_provider(user_prompt: str) -> str:
+    """Call the first configured LLM provider: Ollama → DeepSeek → Anthropic."""
+    if os.getenv("OLLAMA_HOST", "").strip():
+        return _call_ollama(user_prompt)
+    if os.getenv("DEEPSEEK_API_KEY", "").strip():
+        return _call_deepseek(user_prompt)
+    return _call_anthropic(user_prompt)
+
+
 def research_skill(query: str, category: str = None, existing_skills: list = None) -> LLMResearchResponse:
     existing_list = "\n".join(f"- {s}" for s in (existing_skills or []))
     category_hint = f"Preferred category: {category}" if category else ""
@@ -159,11 +188,7 @@ def research_skill(query: str, category: str = None, existing_skills: list = Non
         existing_list=existing_list if existing_list else "None",
     )
 
-    ollama_host = os.getenv("OLLAMA_HOST", "").strip()
-    if ollama_host:
-        response_text = _call_ollama(user_prompt)
-    else:
-        response_text = _call_anthropic(user_prompt)
+    response_text = _pick_provider(user_prompt)
 
     data = _extract_json(response_text)
 
@@ -227,9 +252,6 @@ def research_tool(prompt: str) -> dict:
     """Generate a single ToolDef dict from a plain-English prompt."""
     user_prompt = _TOOL_PROMPT.format(prompt=prompt)
 
-    # Temporarily override system prompt for single-tool generation
-    import anthropic as _ant
-
     ollama_host = os.getenv("OLLAMA_HOST", "").strip()
     if ollama_host:
         model = os.getenv("OLLAMA_MODEL", "llama3.2")
@@ -244,16 +266,30 @@ def research_tool(prompt: str) -> dict:
             "think": False,
             "options": {"temperature": 0, "num_predict": 2048},
         }
-        import httpx as _httpx
-        with _httpx.Client(timeout=300) as c:
+        with httpx.Client(timeout=300) as c:
             r = c.post(f"{host}/api/chat", json=payload)
             r.raise_for_status()
             msg = r.json()["message"]
             response_text = msg.get("content") or msg.get("thinking", "")
+    elif os.getenv("DEEPSEEK_API_KEY", "").strip():
+        from openai import OpenAI
+        model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        client = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com")
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _TOOL_SYSTEM_PROMPT},
+                {"role": "user",   "content": user_prompt},
+            ],
+            max_tokens=2048,
+            temperature=0,
+        )
+        response_text = response.choices[0].message.content.strip()
     else:
+        import anthropic as _ant
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY not set")
+            raise ValueError("No LLM provider configured. Set DEEPSEEK_API_KEY, OLLAMA_HOST, or ANTHROPIC_API_KEY.")
         client = _ant.Anthropic(api_key=api_key)
         message = client.messages.create(
             model="claude-opus-4-8",

@@ -27,6 +27,17 @@ setup_logging()
 _log = log("registry")
 
 
+def _llm_provider_label() -> str:
+    """Return a human-readable label for the active LLM provider."""
+    if os.getenv("OLLAMA_HOST", "").strip():
+        model = os.getenv("OLLAMA_MODEL", "llama3.2")
+        return f"ollama/{model}"
+    if os.getenv("DEEPSEEK_API_KEY", "").strip():
+        model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        return f"deepseek/{model}"
+    return "anthropic/claude-opus-4-8"
+
+
 # ── MCP Server ────────────────────────────────────────────────────────────────
 mcp = FastMCP(
     name="Skills Registry",
@@ -436,9 +447,7 @@ def api_delete_skill(skill_id: str):
 
 @app.post("/skills/research", response_model=LLMResearchResponse)
 def api_research_skill(request: LLMResearchRequest):
-    ollama_host = os.getenv("OLLAMA_HOST", "").strip()
-    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2")
-    provider = f"ollama/{ollama_model}" if ollama_host else "anthropic/claude-opus-4-8"
+    provider = _llm_provider_label()
     _log.info("LLM_RESEARCH_START  query=%r  provider=%s", request.query[:80], provider)
     t0 = time.monotonic()
     try:
@@ -526,9 +535,7 @@ def api_research_tool(req: ToolResearchRequest):
     If skill_id is provided the new tool is appended to that skill immediately."""
     from llm_service import research_tool as _research_tool
 
-    ollama_host  = os.getenv("OLLAMA_HOST", "").strip()
-    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2")
-    provider = f"ollama/{ollama_model}" if ollama_host else "anthropic/claude-opus-4-8"
+    provider = _llm_provider_label()
     _log.info("TOOL_RESEARCH_START  prompt=%r  provider=%s", req.prompt[:80], provider)
     t0 = time.monotonic()
 
@@ -562,15 +569,12 @@ def api_research_tool(req: ToolResearchRequest):
 
 @app.get("/health")
 def health():
-    ollama_host = os.getenv("OLLAMA_HOST", "").strip()
-    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2")
     return {
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
         "registered_tools": len(_registered_tool_names),
         "tools": sorted(_registered_tool_names),
-        "llm_provider": f"ollama/{ollama_model}" if ollama_host else "anthropic/claude-opus-4-8",
-        "ollama_host": ollama_host or None,
+        "llm_provider": _llm_provider_label(),
     }
 
 
