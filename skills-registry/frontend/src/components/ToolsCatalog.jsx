@@ -1,27 +1,120 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Search, X, Play, Loader, CheckCircle, AlertCircle, Cpu, Sparkles, ChevronDown, ChevronRight, Wrench, Zap } from 'lucide-react'
+import { Search, X, Play, Loader, CheckCircle, AlertCircle, Cpu, Sparkles, ChevronDown, ChevronRight, Wrench, Zap, Clock, ArrowRight, ArrowLeft } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { toolsApi, skillsApi } from '../services/api'
 
-// ── Inline tool tester (no collapse needed here — catalog is already focused) ─
+// ── Type badge ────────────────────────────────────────────────────────────────
+
+function TypeBadge({ type }) {
+  const colors = {
+    string:  'bg-blue-900/50 text-blue-300 border-blue-700/40',
+    integer: 'bg-amber-900/50 text-amber-300 border-amber-700/40',
+    number:  'bg-amber-900/50 text-amber-300 border-amber-700/40',
+    boolean: 'bg-purple-900/50 text-purple-300 border-purple-700/40',
+  }
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono border ${colors[type] || 'bg-gray-800 text-gray-400 border-gray-700'}`}>
+      {type || 'any'}
+    </span>
+  )
+}
+
+// ── Execution trace panel ─────────────────────────────────────────────────────
+
+function ExecutionTrace({ trace }) {
+  const { params, schema, result, error, ms, toolName } = trace
+  const props    = schema?.properties || {}
+  const required = new Set(schema?.required || [])
+
+  return (
+    <div className="space-y-2 border-t border-gray-800 pt-2 mt-1">
+      <div className="flex items-center gap-2">
+        {error ? (
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-900/40 border border-red-700/40 text-[11px] text-red-300 font-medium">
+            <AlertCircle className="w-3 h-3" /> Error
+          </span>
+        ) : (
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-900/40 border border-emerald-700/40 text-[11px] text-emerald-300 font-medium">
+            <CheckCircle className="w-3 h-3" /> Success
+          </span>
+        )}
+        {ms !== undefined && (
+          <span className="flex items-center gap-1 text-[11px] text-gray-500">
+            <Clock className="w-3 h-3" /> {ms} ms
+          </span>
+        )}
+        <span className="ml-auto text-[10px] text-gray-600 font-mono">{toolName}</span>
+      </div>
+
+      <div className="rounded-lg border border-gray-800 overflow-hidden">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-900 border-b border-gray-800">
+          <ArrowRight className="w-3 h-3 text-indigo-400" />
+          <span className="text-[11px] font-semibold text-indigo-300">Request</span>
+        </div>
+        <div className="bg-gray-950 px-2.5 py-2 space-y-1.5">
+          {Object.keys(props).length === 0 && Object.keys(params).length === 0 ? (
+            <p className="text-[11px] text-gray-600 italic">No parameters</p>
+          ) : (
+            Object.entries(props).map(([k, info]) => (
+              <div key={k} className="flex items-center gap-2 text-[11px]">
+                <span className="font-mono text-indigo-300 w-24 flex-shrink-0 truncate">{k}</span>
+                <TypeBadge type={info.type} />
+                {required.has(k) && <span className="text-red-400 text-[9px]">req</span>}
+                <span className="font-mono text-emerald-300 flex-1 truncate">
+                  {params[k] !== undefined && params[k] !== ''
+                    ? JSON.stringify(params[k])
+                    : <span className="text-gray-600 italic">—</span>}
+                </span>
+              </div>
+            ))
+          )}
+          <div className="pt-1 border-t border-gray-800/60">
+            <pre className="font-mono text-[10px] text-gray-400 whitespace-pre-wrap">
+              {JSON.stringify({ params }, null, 2)}
+            </pre>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-gray-800 overflow-hidden">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-900 border-b border-gray-800">
+          <ArrowLeft className="w-3 h-3 text-emerald-400" />
+          <span className="text-[11px] font-semibold text-emerald-300">Response</span>
+          {ms !== undefined && <span className="ml-auto text-[10px] text-gray-600">{ms} ms</span>}
+        </div>
+        <div className="bg-gray-950 px-2.5 py-2">
+          {error
+            ? <pre className="font-mono text-[11px] text-red-300 whitespace-pre-wrap">{error}</pre>
+            : <pre className="font-mono text-[11px] text-gray-200 whitespace-pre-wrap">
+                {typeof result === 'string' ? result : JSON.stringify(result, null, 2)}
+              </pre>
+          }
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Inline tool tester ────────────────────────────────────────────────────────
 
 function InlineTester({ tool }) {
-  const [params, setParams] = useState({})
+  const [params, setParams]   = useState({})
   const [running, setRunning] = useState(false)
-  const [result, setResult] = useState(null)
-  const [error, setError] = useState(null)
-  const [open, setOpen] = useState(false)
+  const [trace, setTrace]     = useState(null)
+  const [open, setOpen]       = useState(false)
 
-  const props = tool.input_schema?.properties || {}
+  const schema     = tool.input_schema || {}
+  const props      = schema.properties || {}
+  const required   = new Set(schema.required || [])
   const paramNames = Object.keys(props)
 
   const run = async () => {
-    setRunning(true); setResult(null); setError(null)
+    setRunning(true); setTrace(null)
     try {
       const res = await skillsApi.executeTool(tool.skill_id, tool.tool_name, params)
-      setResult(res.result)
+      setTrace({ toolName: tool.tool_name, params, schema, result: res.result, ms: res.execution_ms, error: null })
     } catch (e) {
-      setError(e.response?.data?.detail || e.message)
+      setTrace({ toolName: tool.tool_name, params, schema, result: null, ms: undefined, error: e.response?.data?.detail || e.message })
     } finally { setRunning(false) }
   }
 
@@ -35,45 +128,34 @@ function InlineTester({ tool }) {
         className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 transition-colors">
         {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
         Test
+        {paramNames.length > 0 && <span className="text-[10px] text-gray-600">· {paramNames.length} param{paramNames.length !== 1 ? 's' : ''}</span>}
       </button>
       {open && (
         <div className="mt-2 space-y-2 border-t border-gray-800 pt-2">
           {paramNames.map(name => (
-            <div key={name} className="flex items-center gap-2">
-              <span className="text-xs font-mono text-indigo-300 w-24 flex-shrink-0 truncate">{name}</span>
+            <div key={name} className="space-y-0.5">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-mono text-indigo-300 font-semibold">{name}</span>
+                <TypeBadge type={props[name]?.type} />
+                {required.has(name) && <span className="text-[9px] text-red-400">required</span>}
+              </div>
+              {props[name]?.description && (
+                <p className="text-[10px] text-gray-500">{props[name].description}</p>
+              )}
               <input
                 value={params[name] || ''}
                 onChange={e => setParams(p => ({ ...p, [name]: e.target.value }))}
-                placeholder={props[name]?.description || name}
-                className="input text-xs py-1 font-mono flex-1"
+                placeholder={props[name]?.description || `Enter ${name}…`}
+                className="input text-xs py-1 font-mono w-full"
               />
             </div>
           ))}
           {paramNames.length === 0 && <p className="text-xs text-gray-600 italic">No parameters</p>}
           <button onClick={run} disabled={running}
             className="btn-primary text-xs py-1 w-full justify-center">
-            {running ? <><Loader className="w-3 h-3 animate-spin" />Running…</> : <><Play className="w-3 h-3" />Run</>}
+            {running ? <><Loader className="w-3 h-3 animate-spin" /> Running…</> : <><Play className="w-3 h-3" /> Run</>}
           </button>
-          {result !== null && (
-            <div>
-              <div className="flex items-center gap-1 mb-1">
-                <CheckCircle className="w-3 h-3 text-emerald-400" />
-                <span className="text-xs text-emerald-400 font-medium">Result</span>
-              </div>
-              <pre className="text-xs font-mono bg-gray-900 border border-gray-800 rounded p-2 text-gray-200 whitespace-pre-wrap overflow-x-auto">
-                {typeof result === 'string' ? result : JSON.stringify(result, null, 2)}
-              </pre>
-            </div>
-          )}
-          {error && (
-            <div>
-              <div className="flex items-center gap-1 mb-1">
-                <AlertCircle className="w-3 h-3 text-red-400" />
-                <span className="text-xs text-red-400 font-medium">Error</span>
-              </div>
-              <pre className="text-xs font-mono bg-red-950/30 border border-red-800/40 rounded p-2 text-red-300 whitespace-pre-wrap">{error}</pre>
-            </div>
-          )}
+          {trace && <ExecutionTrace trace={trace} />}
         </div>
       )}
     </div>

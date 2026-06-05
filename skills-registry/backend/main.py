@@ -245,13 +245,25 @@ def api_execute_tool(skill_id: str, tool_name: str, req: ExecuteRequest):
     if not code:
         raise HTTPException(status_code=400, detail="Tool has no implementation. Add Python code first.")
 
+    t0 = time.monotonic()
     try:
         result = execute_tool(code, tool_name, req.params)
-        return {"ok": True, "result": result, "tool": tool_name}
+        ms = round((time.monotonic() - t0) * 1000)
+        return {
+            "ok": True,
+            "result": result,
+            "tool": tool_name,
+            "skill_id": skill_id,
+            "params_received": req.params,
+            "input_schema": tool_def.get("input_schema") or {},
+            "execution_ms": ms,
+        }
     except TimeoutError as e:
+        ms = round((time.monotonic() - t0) * 1000)
         _log.error("TOOL_TIMEOUT  skill=%s  tool=%s", skill_id, tool_name)
         raise HTTPException(status_code=408, detail=str(e))
     except (ValueError, RuntimeError) as e:
+        ms = round((time.monotonic() - t0) * 1000)
         _log.error("TOOL_EXEC_FAIL  skill=%s  tool=%s  error=%s", skill_id, tool_name, str(e)[:200])
         raise HTTPException(status_code=422, detail=str(e))
 
