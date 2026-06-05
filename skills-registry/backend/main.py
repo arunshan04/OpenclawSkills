@@ -253,9 +253,10 @@ async def log_requests(request, call_next):
     except Exception:
         body_str = body_bytes.decode(errors="replace") if body_bytes else ""
 
-    print(f"\n[{ts}] → {request.method} {request.url.path}", flush=True)
+    _sys.stderr.write(f"\n[{ts}] → {request.method} {request.url.path}\n")
     if body_str:
-        print(f"         IN  {body_str}", flush=True)
+        _sys.stderr.write(f"         IN  {body_str}\n")
+    _sys.stderr.flush()
 
     response = await call_next(request)
 
@@ -271,7 +272,8 @@ async def log_requests(request, call_next):
     except Exception:
         resp_str = resp_body.decode(errors="replace")[:400]
 
-    print(f"         OUT [{response.status_code}] {resp_str}", flush=True)
+    _sys.stderr.write(f"         OUT [{response.status_code}] {resp_str}\n")
+    _sys.stderr.flush()
 
     return Response(
         content=resp_body,

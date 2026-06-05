@@ -47,11 +47,11 @@ echo ""
 
 cd "$BACKEND"
 source .venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload --log-level debug &
+PYTHONUNBUFFERED=1 uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
 BACKEND_PID=$!
 
 cd "$FRONTEND"
-npm run dev -- --debug &
+npm run dev &
 FRONTEND_PID=$!
 
 echo "✅ Both services started!"
