@@ -241,6 +241,46 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_requests(request, call_next):
+    import datetime, json as _json
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+
+    # Read request body
+    body_bytes = await request.body()
+    try:
+        body_str = _json.dumps(_json.loads(body_bytes), separators=(",", ":")) if body_bytes else ""
+    except Exception:
+        body_str = body_bytes.decode(errors="replace") if body_bytes else ""
+
+    print(f"\n[{ts}] → {request.method} {request.url.path}", flush=True)
+    if body_str:
+        print(f"         IN  {body_str}", flush=True)
+
+    response = await call_next(request)
+
+    # Read response body
+    from starlette.responses import Response
+    resp_body = b""
+    async for chunk in response.body_iterator:
+        resp_body += chunk
+    try:
+        resp_str = _json.dumps(_json.loads(resp_body), separators=(",", ":"))
+        if len(resp_str) > 400:
+            resp_str = resp_str[:400] + "…"
+    except Exception:
+        resp_str = resp_body.decode(errors="replace")[:400]
+
+    print(f"         OUT [{response.status_code}] {resp_str}", flush=True)
+
+    return Response(
+        content=resp_body,
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        media_type=response.media_type,
+    )
+
+
 # ── Tool execution ────────────────────────────────────────────────────────────
 class ExecuteRequest(BaseModel):
     params: dict[str, Any] = {}
