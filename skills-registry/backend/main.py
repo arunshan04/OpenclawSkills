@@ -50,11 +50,20 @@ mcp = FastMCP(
 
 _registered_tool_names: set[str] = set()
 
+import sys as _sys
+
+def _mcp_print(msg: str):
+    """Print directly to stderr — visible even when FastMCP rewires the root logger."""
+    ts = __import__("datetime").datetime.now().strftime("%H:%M:%S")
+    print(f"[MCP {ts}] {msg}", file=_sys.stderr, flush=True)
+
 
 def _wrap_with_logging(fn, tool_name: str):
-    """Wrap a tool function so every MCP call is logged with full params, result, and timing."""
+    """Wrap a tool function so every MCP call is printed + logged with full params and result."""
     @functools.wraps(fn)
     def logged(**kwargs):
+        # print() bypasses logging — always visible even after FastMCP reconfigures the root logger
+        _mcp_print(f"→ CALL  {tool_name}  params={kwargs}")
         _log.info(
             "TOOL_CALL  tool=%s  params=%s", tool_name, kwargs,
             extra={"event": "TOOL_CALL", "tool": tool_name, "params": dict(kwargs)},
@@ -63,6 +72,7 @@ def _wrap_with_logging(fn, tool_name: str):
         try:
             result = fn(**kwargs)
             ms = round((time.monotonic() - t0) * 1000)
+            _mcp_print(f"← OK    {tool_name}  {ms}ms  result={str(result)[:300]}")
             _log.info(
                 "TOOL_OK  tool=%s  ms=%d  result=%r", tool_name, ms, str(result)[:200],
                 extra={"event": "TOOL_OK", "tool": tool_name, "params": dict(kwargs),
@@ -71,6 +81,7 @@ def _wrap_with_logging(fn, tool_name: str):
             return result
         except Exception as exc:
             ms = round((time.monotonic() - t0) * 1000)
+            _mcp_print(f"← ERR   {tool_name}  {ms}ms  error={exc}")
             _log.error(
                 "TOOL_ERROR  tool=%s  ms=%d  error=%s", tool_name, ms, exc,
                 extra={"event": "TOOL_ERROR", "tool": tool_name, "params": dict(kwargs),
@@ -254,6 +265,7 @@ def api_execute_tool(skill_id: str, tool_name: str, req: ExecuteRequest):
     if not code:
         raise HTTPException(status_code=400, detail="Tool has no implementation. Add Python code first.")
 
+    _mcp_print(f"→ REST  {tool_name}  params={req.params}")
     _log.info(
         "TOOL_CALL  tool=%s  params=%s", tool_name, req.params,
         extra={"event": "TOOL_CALL", "tool": tool_name, "skill_id": skill_id,
@@ -263,6 +275,7 @@ def api_execute_tool(skill_id: str, tool_name: str, req: ExecuteRequest):
     try:
         result = execute_tool(code, tool_name, req.params)
         ms = round((time.monotonic() - t0) * 1000)
+        _mcp_print(f"← REST  {tool_name}  {ms}ms  result={str(result)[:300]}")
         _log.info(
             "TOOL_OK  tool=%s  ms=%d  result=%r", tool_name, ms, str(result)[:200],
             extra={"event": "TOOL_OK", "tool": tool_name, "skill_id": skill_id,
@@ -280,6 +293,7 @@ def api_execute_tool(skill_id: str, tool_name: str, req: ExecuteRequest):
         }
     except TimeoutError as e:
         ms = round((time.monotonic() - t0) * 1000)
+        _mcp_print(f"← TIMEOUT {tool_name}  {ms}ms")
         _log.error(
             "TOOL_TIMEOUT  tool=%s  ms=%d", tool_name, ms,
             extra={"event": "TOOL_ERROR", "tool": tool_name, "skill_id": skill_id,
@@ -288,6 +302,7 @@ def api_execute_tool(skill_id: str, tool_name: str, req: ExecuteRequest):
         raise HTTPException(status_code=408, detail=str(e))
     except (ValueError, RuntimeError) as e:
         ms = round((time.monotonic() - t0) * 1000)
+        _mcp_print(f"← ERR   {tool_name}  {ms}ms  error={str(e)[:200]}")
         _log.error(
             "TOOL_EXEC_FAIL  tool=%s  ms=%d  error=%s", tool_name, ms, str(e)[:200],
             extra={"event": "TOOL_ERROR", "tool": tool_name, "skill_id": skill_id,
