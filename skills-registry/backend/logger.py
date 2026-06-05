@@ -12,6 +12,12 @@ _log_buffer: deque = deque(maxlen=500)
 LOG_FILE = os.environ.get("REGISTRY_LOG_FILE", "/tmp/registry.log")
 
 
+_STRUCTURED_FIELDS = {
+    "event", "tool", "skill_id", "skill_name",
+    "params", "result", "error", "execution_ms", "ok",
+}
+
+
 class BufferHandler(logging.Handler):
     def emit(self, record: logging.LogRecord):
         entry = {
@@ -20,8 +26,9 @@ class BufferHandler(logging.Handler):
             "logger": record.name,
             "msg": record.getMessage(),
         }
-        if hasattr(record, "extra"):
-            entry.update(record.extra)
+        for field in _STRUCTURED_FIELDS:
+            if hasattr(record, field):
+                entry[field] = getattr(record, field)
         _log_buffer.append(entry)
 
 

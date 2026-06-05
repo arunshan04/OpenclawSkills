@@ -52,21 +52,30 @@ _registered_tool_names: set[str] = set()
 
 
 def _wrap_with_logging(fn, tool_name: str):
-    """Wrap a tool function so every MCP call is logged with params, result, and timing."""
+    """Wrap a tool function so every MCP call is logged with full params, result, and timing."""
     @functools.wraps(fn)
     def logged(**kwargs):
-        param_summary = {k: (str(v)[:80] if isinstance(v, str) else v) for k, v in kwargs.items()}
-        _log.info("TOOL_CALL  tool=%s  params=%s", tool_name, param_summary)
+        _log.info(
+            "TOOL_CALL  tool=%s  params=%s", tool_name, kwargs,
+            extra={"event": "TOOL_CALL", "tool": tool_name, "params": dict(kwargs)},
+        )
         t0 = time.monotonic()
         try:
             result = fn(**kwargs)
             ms = round((time.monotonic() - t0) * 1000)
-            preview = str(result)[:120].replace("\n", "↵")
-            _log.info("TOOL_OK  tool=%s  ms=%d  result=%r", tool_name, ms, preview)
+            _log.info(
+                "TOOL_OK  tool=%s  ms=%d  result=%r", tool_name, ms, str(result)[:200],
+                extra={"event": "TOOL_OK", "tool": tool_name, "params": dict(kwargs),
+                       "result": str(result), "execution_ms": ms, "ok": True},
+            )
             return result
         except Exception as exc:
             ms = round((time.monotonic() - t0) * 1000)
-            _log.error("TOOL_ERROR  tool=%s  ms=%d  error=%s", tool_name, ms, exc)
+            _log.error(
+                "TOOL_ERROR  tool=%s  ms=%d  error=%s", tool_name, ms, exc,
+                extra={"event": "TOOL_ERROR", "tool": tool_name, "params": dict(kwargs),
+                       "error": str(exc), "execution_ms": ms, "ok": False},
+            )
             raise
     return logged
 
@@ -245,10 +254,21 @@ def api_execute_tool(skill_id: str, tool_name: str, req: ExecuteRequest):
     if not code:
         raise HTTPException(status_code=400, detail="Tool has no implementation. Add Python code first.")
 
+    _log.info(
+        "TOOL_CALL  tool=%s  params=%s", tool_name, req.params,
+        extra={"event": "TOOL_CALL", "tool": tool_name, "skill_id": skill_id,
+               "skill_name": skill.get("name", ""), "params": req.params},
+    )
     t0 = time.monotonic()
     try:
         result = execute_tool(code, tool_name, req.params)
         ms = round((time.monotonic() - t0) * 1000)
+        _log.info(
+            "TOOL_OK  tool=%s  ms=%d  result=%r", tool_name, ms, str(result)[:200],
+            extra={"event": "TOOL_OK", "tool": tool_name, "skill_id": skill_id,
+                   "skill_name": skill.get("name", ""), "params": req.params,
+                   "result": str(result), "execution_ms": ms, "ok": True},
+        )
         return {
             "ok": True,
             "result": result,
@@ -260,11 +280,19 @@ def api_execute_tool(skill_id: str, tool_name: str, req: ExecuteRequest):
         }
     except TimeoutError as e:
         ms = round((time.monotonic() - t0) * 1000)
-        _log.error("TOOL_TIMEOUT  skill=%s  tool=%s", skill_id, tool_name)
+        _log.error(
+            "TOOL_TIMEOUT  tool=%s  ms=%d", tool_name, ms,
+            extra={"event": "TOOL_ERROR", "tool": tool_name, "skill_id": skill_id,
+                   "params": req.params, "error": str(e), "execution_ms": ms, "ok": False},
+        )
         raise HTTPException(status_code=408, detail=str(e))
     except (ValueError, RuntimeError) as e:
         ms = round((time.monotonic() - t0) * 1000)
-        _log.error("TOOL_EXEC_FAIL  skill=%s  tool=%s  error=%s", skill_id, tool_name, str(e)[:200])
+        _log.error(
+            "TOOL_EXEC_FAIL  tool=%s  ms=%d  error=%s", tool_name, ms, str(e)[:200],
+            extra={"event": "TOOL_ERROR", "tool": tool_name, "skill_id": skill_id,
+                   "params": req.params, "error": str(e), "execution_ms": ms, "ok": False},
+        )
         raise HTTPException(status_code=422, detail=str(e))
 
 
