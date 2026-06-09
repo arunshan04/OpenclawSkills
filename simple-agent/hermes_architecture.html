@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Hermes Agent — Architecture</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      padding: 32px 24px;
+    }
+    h1 {
+      text-align: center;
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: .5px;
+      margin-bottom: 4px;
+      background: linear-gradient(90deg, #ffd700, #ffaa00);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle {
+      text-align: center;
+      font-size: .85rem;
+      color: #8b949e;
+      margin-bottom: 36px;
+    }
+    .panel {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 28px;
+      overflow-x: auto;
+    }
+    .panel h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #ffd700;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #30363d;
+    }
+    .mermaid svg { width: 100% !important; height: auto !important; }
+
+    /* legend */
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: .78rem;
+      color: #8b949e;
+    }
+    .dot {
+      width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>☤ Hermes Agent — Architecture Flowchart</h1>
+  <p class="subtitle">NousResearch/hermes-agent · simplified view of key subsystems and data flow</p>
+
+  <!-- ── PANEL 1: Full system overview ── -->
+  <div class="panel">
+    <h2>① System Overview — Entry → Agent → Subsystems</h2>
+    <div class="mermaid">
+flowchart TD
+  classDef entry    fill:#1f4068,stroke:#4a90d9,color:#c9d1d9
+  classDef core     fill:#1c2a1c,stroke:#3fb950,color:#c9d1d9
+  classDef mem      fill:#2a1f00,stroke:#ffd700,color:#c9d1d9
+  classDef tool     fill:#1e1b2e,stroke:#a371f7,color:#c9d1d9
+  classDef store    fill:#1a1a2e,stroke:#58a6ff,color:#c9d1d9
+  classDef gw       fill:#2a1a1a,stroke:#f78166,color:#c9d1d9
+  classDef skill    fill:#1a2a1a,stroke:#56d364,color:#c9d1d9
+  classDef plugin   fill:#1a1a1a,stroke:#8b949e,color:#c9d1d9
+
+  CLI["🖥 CLI\ncli.py · HermesCLI"]:::entry
+  GW_IN["📡 Gateway\ngateway/run.py"]:::entry
+  ACP["🔌 ACP / IDE\nacp_adapter/"]:::entry
+  BATCH["⚡ Batch Runner\nbatch_runner.py"]:::entry
+  API_SRV["🌐 API Server\ngateway/platforms/api_server.py"]:::entry
+
+  subgraph AGENT["  AIAgent  (run_agent.py + agent_init.py)  "]
+    INIT["Init\n• IterationBudget\n• MemoryStore (MEMORY.md/USER.md)\n• MemoryManager (plugin providers)\n• ContextCompressor\n• CheckpointManager · TodoStore\n• tools ← get_tool_definitions()"]:::core
+    CONV["run_conversation()\n→ agent/conversation_loop.py"]:::core
+  end
+
+  CLI & GW_IN & ACP & BATCH & API_SRV --> INIT --> CONV
+
+  CONV --> PROLOGUE
+  CONV --> LOOP
+  CONV --> POST
+
+  subgraph PROLOGUE["  Turn Prologue — turn_context.py  "]
+    SYS["Build system prompt\nprompt_builder.py\n(stable → context → volatile)"]:::mem
+    PRE["memory_manager.prefetch_all(query)\n→ ext_prefetch_cache"]:::mem
+    HOOK["pre_llm_call plugin hooks"]:::plugin
+  end
+
+  subgraph LOOP["  Conversation Loop — conversation_loop.py  "]
+    ITER["while api_call_count &lt; max_iterations\n  and budget.remaining &gt; 0"]:::core
+    INJECT["Build api_messages\ninject ext_prefetch_cache\ninto current user message copy\n(not persisted)"]:::mem
+    API["Provider API call\nchat_completions / anthropic_messages\n/ codex_responses"]:::core
+    TC{"tool_calls?"}:::core
+    EXEC["execute_tool_calls()\ntool_executor.py"]:::tool
+    DISPATCH["handle_function_call()\nmodel_tools.py → registry.dispatch()"]:::tool
+    DONE["Final text response ✓"]:::core
+  end
+
+  subgraph POST["  Post-Turn  "]
+    SYNC["memory_manager.sync_all()\n(background thread)"]:::mem
+    SAVE["SessionDB.save_message()\nhermes_state.py · SQLite+FTS5"]:::store
+    NUDGE["skill nudge / memory review\n(periodic, turn-counter gated)"]:::skill
+  end
+
+  ITER --> INJECT --> API --> TC
+  TC -- yes --> EXEC --> DISPATCH --> ITER
+  TC -- no --> DONE --> POST
+    </div>
+  </div>
+
+  <!-- ── PANEL 2: Memory detail ── -->
+  <div class="panel">
+    <h2>② Memory System — Two Paths</h2>
+    <div class="mermaid">
+flowchart LR
+  classDef mem   fill:#2a1f00,stroke:#ffd700,color:#c9d1d9
+  classDef sys   fill:#1c2a1c,stroke:#3fb950,color:#c9d1d9
+  classDef api   fill:#1a1a2e,stroke:#58a6ff,color:#c9d1d9
+
+  subgraph STATIC["PATH A · Static (loaded once → system prompt)"]
+    direction TB
+    MS["MemoryStore\nload_from_disk()\n\nMEMORY.md — agent facts\nUSER.md   — user profile"]:::mem
+    EP["MemoryManager.build_system_prompt()\nprovider.system_prompt_block()"]:::mem
+    VP["Volatile tier of system prompt\n(rebuilt only at compression boundary\nor new session — cache-friendly)"]:::sys
+    MS --> VP
+    EP --> VP
+  end
+
+  subgraph DYNAMIC["PATH B · Dynamic (per-turn recall → user message)"]
+    direction TB
+    PA["MemoryManager.prefetch_all(query)\n→ semantic recall from provider\n(honcho · mem0 · supermemory · ...)"]:::mem
+    FENCE["build_memory_context_block()\nwrap result in &lt;memory&gt; fence"]:::mem
+    INJ["Injected into API-bound copy\nof current user message ONLY\n(never written back to messages[])"]:::api
+    PA --> FENCE --> INJ
+  end
+
+  subgraph WRITE["POST-TURN · Write-back (background thread)"]
+    direction TB
+    SYNC["memory_manager.sync_all(user, assistant)\n→ provider.sync_turn()"]:::mem
+    QUEUE["memory_manager.queue_prefetch_all()\n(warm cache for next turn)"]:::mem
+    NATIVE["agent calls memory tool\n→ updates MEMORY.md / USER.md on disk"]:::mem
+    SYNC --- QUEUE
+    SYNC --- NATIVE
+  end
+
+  VP --"baked into prompt\n at session start"--> C1((" "))
+  INJ --"added to outgoing\n request each turn"--> C1
+  C1 --> MODEL["Model sees\n• long-term facts\n• user profile\n• live recalled context\nevery turn"]:::sys
+  MODEL --> WRITE
+    </div>
+  </div>
+
+  <!-- ── PANEL 3: Tool system ── -->
+  <div class="panel">
+    <h2>③ Tool System — Registry → Dispatch → Backends</h2>
+    <div class="mermaid">
+flowchart TD
+  classDef reg   fill:#1e1b2e,stroke:#a371f7,color:#c9d1d9
+  classDef tool  fill:#1c1c2e,stroke:#d2a8ff,color:#c9d1d9
+  classDef back  fill:#1a2a1a,stroke:#56d364,color:#c9d1d9
+
+  subgraph DISC["Auto-discovery (import time)"]
+    FILES["tools/*.py\neach calls registry.register()\nschema · handler · check_fn"]:::reg
+  end
+
+  REGISTRY["tools/registry.py\nToolEntry: name · toolset · schema\n· handler · check_fn · is_async"]:::reg
+
+  subgraph EXPOSE["Toolset → Exposure"]
+    TOOLSETS["toolsets.py · 28 toolsets\nterminal · browser · web · search\nfile · memory · skills · delegation\ncronjob · mcp · kanban · tts · ..."]:::reg
+    GATE["get_tool_definitions()\nenabled/disabled per platform\n→ schemas sent to model"]:::reg
+  end
+
+  DISPATCH["handle_function_call()\ncoerce args · pre/post hooks\n→ registry.dispatch()"]:::reg
+
+  subgraph BACKENDS["Execution Backends"]
+    T["🖥 Terminal\n6 backends:\nlocal · docker · ssh\nModal · Daytona · Singularity"]:::back
+    B["🌐 Browser\nPlaywright / CDP"]:::back
+    F["📁 File\nread · write · patch · search"]:::back
+    W["🔍 Web\nsearch · extract"]:::back
+    M["🔌 MCP Client\nmcp_tool.py · dynamic"]:::back
+    D["🤖 Delegate\nspawn subagent\nleaf or orchestrator"]:::back
+    SK["📚 Skills\nskill_manage · skills_hub"]:::back
+  end
+
+  APPROVAL["approval.py\ntools/tirith_security.py\ndangerous-command gate"]:::reg
+
+  FILES --> REGISTRY --> EXPOSE --> DISPATCH
+  DISPATCH --> APPROVAL --> T & B & F & W & M & D & SK
+    </div>
+  </div>
+
+  <!-- ── PANEL 4: Gateway + async subsystems ── -->
+  <div class="panel">
+    <h2>④ Gateway + Supporting Subsystems</h2>
+    <div class="mermaid">
+flowchart LR
+  classDef gw    fill:#2a1a1a,stroke:#f78166,color:#c9d1d9
+  classDef core  fill:#1c2a1c,stroke:#3fb950,color:#c9d1d9
+  classDef sched fill:#1a1a2e,stroke:#58a6ff,color:#c9d1d9
+  classDef skill fill:#1a2a1a,stroke:#56d364,color:#c9d1d9
+
+  GW_RUN["GatewayRunner\ngateway/run.py"]:::gw
+
+  subgraph PLAT["20 Platform Adapters\ngateway/platforms/"]
+    TG["Telegram"]:::gw
+    DS["Discord"]:::gw
+    SL["Slack"]:::gw
+    WA["WhatsApp"]:::gw
+    SIG["Signal"]:::gw
+    MAT["Matrix"]:::gw
+    EML["Email / SMS"]:::gw
+    OTH["DingTalk · Feishu\nWeChat · QQBot\nBlueBubbles · ..."]:::gw
+  end
+
+  GW_RUN --> PLAT
+
+  subgraph SESSION["Session Routing"]
+    AUTH["authorize user\n(allowlist / DM pairing)"]:::gw
+    SESS["resolve session key\n→ per-user / per-chat"]:::gw
+    CACHE["LRU agent cache\nmax 128 · 1h TTL\nreuse AIAgent across turns"]:::gw
+  end
+
+  GW_RUN --> SESSION --> AI["AIAgent\nrun_conversation()"]:::core
+
+  subgraph SCHED["Scheduled & Async Work"]
+    CRON["Cron Scheduler\ncron/jobs.py\n30m · 2h · 0 9 ** · ISO\n→ fresh AIAgent per job"]:::sched
+    KANBAN["Kanban Board\nSQLite · multi-agent\nboard / tenant isolation"]:::sched
+    CURATOR["Curator\n(background auxiliary LLM)\nreviews agent-created skills\nauto-archives stale ones"]:::skill
+    DELEGATE["delegate_task\nisolated subagents\nleaf · orchestrator\ndepth ≤ 2 · concurrency ≤ 3"]:::sched
+  end
+
+  AI --> SCHED
+
+  subgraph PLUGIN_SYS["Plugin System"]
+    PLG["PluginManager\n~/.hermes/plugins/\n.hermes/plugins/\npip entry points"]:::core
+    HOOKS["Lifecycle hooks\npre/post_tool_call\npre/post_llm_call\non_session_start/end"]:::core
+    MEM_PLG["Memory provider plugins\none active at a time\nMemoryProvider ABC"]:::core
+    CTX_PLG["Context engine plugins\none active at a time\nContextEngine ABC"]:::core
+  end
+
+  AI --> PLUGIN_SYS
+    </div>
+  </div>
+
+  <!-- legend -->
+  <div class="panel">
+    <h2>⑤ Colour Legend</h2>
+    <div class="legend">
+      <div class="legend-item"><div class="dot" style="background:#1f4068;border:1px solid #4a90d9"></div> Entry points</div>
+      <div class="legend-item"><div class="dot" style="background:#1c2a1c;border:1px solid #3fb950"></div> Core agent / loop</div>
+      <div class="legend-item"><div class="dot" style="background:#2a1f00;border:1px solid #ffd700"></div> Memory system</div>
+      <div class="legend-item"><div class="dot" style="background:#1e1b2e;border:1px solid #a371f7"></div> Tool registry / dispatch</div>
+      <div class="legend-item"><div class="dot" style="background:#1a1a2e;border:1px solid #58a6ff"></div> Session storage / cron</div>
+      <div class="legend-item"><div class="dot" style="background:#2a1a1a;border:1px solid #f78166"></div> Gateway / platforms</div>
+      <div class="legend-item"><div class="dot" style="background:#1a2a1a;border:1px solid #56d364"></div> Skills / curator</div>
+      <div class="legend-item"><div class="dot" style="background:#1a1a1a;border:1px solid #8b949e"></div> Plugin system</div>
+    </div>
+  </div>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      flowchart: { curve: 'basis', padding: 20 },
+      themeVariables: {
+        primaryColor: '#1c2a1c',
+        primaryTextColor: '#e6edf3',
+        primaryBorderColor: '#3fb950',
+        lineColor: '#8b949e',
+        secondaryColor: '#161b22',
+        tertiaryColor: '#0d1117',
+        edgeLabelBackground: '#161b22',
+        clusterBkg: '#161b22',
+        clusterBorder: '#30363d',
+      }
+    });
+  </script>
+</body>
+</html>
