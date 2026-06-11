@@ -1,40 +1,72 @@
-"""A minimal agent: persistent memory, SQLite-backed conversations, and file-based skills.
+"""A small conversational agent: persistent memory, SQLite conversations,
+markdown skills, and DeepSeek as the LLM backend.
 
-Loosely modeled on the Hermes Agent architecture (memory store + SessionDB +
-skills directory), scaled down to one class for learning/demo purposes.
+Loosely modeled on the Hermes Agent architecture, scaled down to one class:
+    - Memory     -> memory.json   (durable key/value facts, in the system prompt)
+    - Skills     -> skills/*.md   (description + procedure, summarized in the
+                                    system prompt; full body injected when relevant)
+    - Sessions   -> conversations.db (SQLite, full message history per session_id)
+    - LLM        -> DeepSeek's OpenAI-compatible Chat Completions API
 
-Layout under `home`:
-    memory.json       - durable key/value facts the agent remembers across sessions
-    conversations.db  - SQLite log of every message, grouped by session_id
-    skills/*.md       - markdown snippets the agent can pull in by name
+DeepSeek setup:
+    export DEEPSEEK_API_KEY="sk-..."
+    # optional overrides:
+    export DEEPSEEK_BASE_URL="https://api.deepseek.com"
+    export DEEPSEEK_MODEL="deepseek-chat"
+
+Without an API key the agent still runs in a simple offline mode (keyword
+matching against memory and skills) so the rest of the class can be exercised
+without network access.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
 import sqlite3
 import time
 from pathlib import Path
 from typing import Optional
 
+DEFAULT_BASE_URL = "https://api.deepseek.com"
+DEFAULT_MODEL = "deepseek-chat"
+HISTORY_LIMIT = 20  # most recent messages sent to the LLM as context
+
 
 class Agent:
-    """An agent that remembers facts, logs conversations to SQLite, and uses skills from disk."""
+    """A conversational agent with memory, SQLite-backed sessions, skills, and DeepSeek as the LLM."""
 
-    def __init__(self, name: str, home: str | Path = "./agent_home"):
+    def __init__(
+        self,
+        name: str,
+        home: str | Path = "./agent_home",
+        skills_dir: Optional[str | Path] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
         self.name = name
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True)
 
+        # ---- Memory ----
         self.memory_path = self.home / "memory.json"
         self.memory: dict[str, str] = self._load_memory()
 
-        self.skills_dir = self.home / "skills"
-        self.skills_dir.mkdir(exist_ok=True)
-        self.skills: dict[str, str] = self._load_skills()
+        # ---- Skills (bundled alongside this file by default) ----
+        self.skills_dir = Path(skills_dir) if skills_dir else Path(__file__).parent / "skills"
+        self.skills: dict[str, dict[str, str]] = self._load_skills()
 
+        # ---- Conversations ----
         self.db = sqlite3.connect(self.home / "conversations.db", check_same_thread=False)
         self._init_db()
+
+        # ---- LLM (DeepSeek, OpenAI-compatible) ----
+        self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
+        self.base_url = base_url or os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL)
+        self.model = model or os.environ.get("DEEPSEEK_MODEL", DEFAULT_MODEL)
+        self._client = None  # lazily created — see _llm_client()
 
     # ------------------------------------------------------------------
     # Memory — durable key/value facts persisted to memory.json
@@ -85,58 +117,162 @@ class Agent:
         )
         self.db.commit()
 
-    def get_history(self, session_id: str) -> list[dict]:
-        rows = self.db.execute(
-            "SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY id",
-            (session_id,),
-        ).fetchall()
-        return [{"role": role, "content": content, "created_at": ts} for role, content, ts in rows]
+    def get_history(self, session_id: str, limit: Optional[int] = None) -> list[dict]:
+        query = "SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY id"
+        rows = self.db.execute(query, (session_id,)).fetchall()
+        history = [{"role": role, "content": content, "created_at": ts} for role, content, ts in rows]
+        return history[-limit:] if limit else history
 
     # ------------------------------------------------------------------
-    # Skills — markdown snippets loaded from skills/*.md, matched by name
+    # Skills — markdown files with a `description:` front-matter field
     # ------------------------------------------------------------------
-    def _load_skills(self) -> dict[str, str]:
-        return {path.stem: path.read_text() for path in sorted(self.skills_dir.glob("*.md"))}
+    def _load_skills(self) -> dict[str, dict[str, str]]:
+        skills = {}
+        for path in sorted(self.skills_dir.glob("*.md")):
+            text = path.read_text()
+            skills[path.stem] = {"description": self._extract_description(text), "body": text}
+        return skills
+
+    @staticmethod
+    def _extract_description(text: str) -> str:
+        match = re.search(r"^description:\s*(.+)$", text, re.MULTILINE)
+        if match:
+            return match.group(1).strip()
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith(("#", "-", "-")):
+                return line
+        return ""
 
     def list_skills(self) -> list[str]:
         return sorted(self.skills)
 
     def use_skill(self, name: str) -> Optional[str]:
-        return self.skills.get(name)
+        skill = self.skills.get(name)
+        return skill["body"] if skill else None
+
+    def _match_skill(self, message: str) -> Optional[str]:
+        lowered = message.lower()
+        for name in self.skills:
+            if name.lower() in lowered or name.replace("_", " ").lower() in lowered:
+                return name
+        return None
 
     # ------------------------------------------------------------------
-    # Conversation turn — ties memory, skills, and the conversation log together
+    # System prompt — persona + memory facts + skill summaries
+    # ------------------------------------------------------------------
+    def _build_system_prompt(self) -> str:
+        parts = [f"You are {self.name}, a helpful conversational assistant."]
+
+        if self.memory:
+            facts = "\n".join(f"- {key}: {value}" for key, value in self.memory.items())
+            parts.append(f"Known facts (persistent memory):\n{facts}")
+
+        if self.skills:
+            listing = "\n".join(f"- {name}: {meta['description']}" for name, meta in self.skills.items())
+            parts.append(
+                "Available skills (their full instructions are provided when relevant):\n" + listing
+            )
+
+        return "\n\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # LLM — DeepSeek via the OpenAI-compatible Chat Completions API
+    # ------------------------------------------------------------------
+    def _llm_client(self):
+        if self._client is None:
+            from openai import OpenAI
+
+            self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        return self._client
+
+    def _call_llm(self, messages: list[dict]) -> str:
+        client = self._llm_client()
+        response = client.chat.completions.create(model=self.model, messages=messages)
+        return response.choices[0].message.content
+
+    # ------------------------------------------------------------------
+    # Conversation turn
     # ------------------------------------------------------------------
     def respond(self, session_id: str, message: str) -> str:
-        """Log the user's message, draft a reply from memory + matching skills, log and return it."""
+        """Log the user's message, get a reply (DeepSeek if configured, offline otherwise), log and return it."""
         self.add_message(session_id, "user", message)
 
+        if self.api_key:
+            reply = self._respond_with_llm(session_id, message)
+        else:
+            reply = self._respond_offline(message)
+
+        self.add_message(session_id, "assistant", reply)
+        return reply
+
+    def _respond_with_llm(self, session_id: str, message: str) -> str:
+        messages = [{"role": "system", "content": self._build_system_prompt()}]
+
+        matched_skill = self._match_skill(message)
+        if matched_skill:
+            messages.append({
+                "role": "system",
+                "content": f"The user's message matches the '{matched_skill}' skill. "
+                           f"Follow these instructions:\n\n{self.skills[matched_skill]['body']}",
+            })
+
+        messages.extend(
+            {"role": entry["role"], "content": entry["content"]}
+            for entry in self.get_history(session_id, limit=HISTORY_LIMIT)
+        )
+
+        try:
+            return self._call_llm(messages)
+        except Exception as exc:
+            return f"[DeepSeek call failed: {exc}]"
+
+    def _respond_offline(self, message: str) -> str:
+        """Keyword-based fallback used when no DEEPSEEK_API_KEY is configured."""
         lowered = message.lower()
         notes = [
             f"(recalling {key}: {value})"
             for key, value in self.memory.items()
             if key.lower().replace("_", " ") in lowered
         ]
-        notes += [f"[skill: {name}]\n{body.strip()}" for name, body in self.skills.items() if name.lower() in lowered]
 
-        reply = "\n".join(notes) if notes else f"{self.name}: I heard \"{message}\" but have no matching memory or skill."
-        self.add_message(session_id, "assistant", reply)
-        return reply
+        matched_skill = self._match_skill(message)
+        if matched_skill:
+            notes.append(f"[skill: {matched_skill}]\n{self.skills[matched_skill]['body'].strip()}")
+
+        if notes:
+            return "\n".join(notes)
+        return (
+            f"{self.name}: I heard \"{message}\" but have no matching memory or skill "
+            "(set DEEPSEEK_API_KEY for full conversational replies)."
+        )
 
     def close(self) -> None:
         self.db.close()
 
 
+def main() -> None:
+    agent = Agent("Hermes-lite", home="./agent_home")
+    session_id = "cli"
+
+    mode = "DeepSeek" if agent.api_key else "offline (no DEEPSEEK_API_KEY set)"
+    print(f"{agent.name} ready [{mode}]. Skills: {', '.join(agent.list_skills()) or 'none'}.")
+    print("Type 'exit' to quit.\n")
+
+    try:
+        while True:
+            try:
+                user_input = input("you> ").strip()
+            except EOFError:
+                break
+            if user_input.lower() in {"exit", "quit"}:
+                break
+            if not user_input:
+                continue
+            print(f"{agent.name}> {agent.respond(session_id, user_input)}\n")
+    finally:
+        agent.close()
+
+
 if __name__ == "__main__":
-    agent = Agent("Demo", home="./agent_home")
-
-    (agent.skills_dir / "greeting.md").write_text("# Greeting Skill\nSay hello warmly and ask how you can help.")
-    agent.skills = agent._load_skills()
-
-    agent.remember("favorite_color", "teal")
-
-    print(agent.respond("session-1", "What's my favorite color?"))
-    print(agent.respond("session-1", "Can you use the greeting skill?"))
-    print("History:", agent.get_history("session-1"))
-
-    agent.close()
+    main()
